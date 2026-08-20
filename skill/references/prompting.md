@@ -119,6 +119,50 @@ take up to 5 PNG references. Everything is steered through prompt text.
   backgrounds; iterate serially, changing one thing per edit (inferred
   workflow).
 
+### Anti-"AI look": make photos read as real
+
+The default gpt-image output screams AI: waxy poreless skin, teal-orange
+grading, HDR-glossy even light, dead-centered symmetric composition, posed
+subjects, sterile clutter-free scenes. Real photos are full of small
+failures — blown highlights, tilted horizons, missed focus, ugly light.
+Steer against every telltale with positive description (there is no
+negative-prompt knob):
+
+- **Camera/film language — the highest-impact fix.** "shot on a 35mm lens
+  at f/2", "ISO 1600, natural film grain visible", "shot on iPhone 15
+  Pro", "Kodak Gold 200, fine grain". Skip the most-memed stocks (Portra
+  400, Cinestill 800T) — they've become their own AI tell. Specs are
+  interpreted as intent, not physics.
+- **Imperfect, concrete light** instead of "beautiful lighting": "harsh
+  direct on-camera flash, hotspot on faces, background falling to
+  near-black", "flat overcast daylight, muted cool color", "mixed warm
+  streetlight and cool fluorescent", "slightly underexposed available
+  light".
+- **Name the palette** ("muted earth tones", "faded warmth",
+  "monochromatic") so the model can't default to teal-orange.
+- **Candid composition**: "off-center framing, slightly tilted horizon,
+  cropped at the edge, subject looking away mid-laugh, unposed, slight
+  motion blur"; name a genre — "documentary photojournalism", "candid
+  amateur snapshot".
+- **Texture and imperfection**: "visible pores and fine lines, uneven skin
+  tone, flyaway hairs, fabric weave visible, dust on the lens, chromatic
+  aberration at contrast edges, halation around lights".
+- **Mundane context** grounds the scene: "crumbs on the counter, tangled
+  charger cable, damp pavement, ordinary everyday people".
+- **Never write** the quality-worship words: "stunning", "8k",
+  "ultra-detailed", "hyper-realistic", "masterpiece", "cinematic",
+  "perfect", "flawless", "beautiful lighting" — they summon the glossy
+  aesthetic. Phrase avoidance affirmatively: not "no plastic skin" but
+  "visible pores and natural skin texture".
+- **Reference PNGs are the strongest anchor**: attach a real photograph
+  and state the relationship — "match the color palette, grain, and
+  lighting of image 1; new subject: …".
+
+Before → after: "Stunning ultra-realistic 8k portrait, perfect lighting,
+masterpiece" → "Candid amateur flash snapshot, harsh direct on-camera
+flash, hotspot on the faces, background falling into near-black, slight
+motion blur, framing a little tilted, unposed".
+
 ## 6. Sources
 
 - OpenAI Cookbook — GPT-5.x prompting guide (gpt-5-2_prompting_guide.ipynb)
@@ -127,6 +171,9 @@ take up to 5 PNG references. Everything is steered through prompt text.
 - simonw.substack.com — "The new GPT-5.6 family: Luna, Terra…"
 - vellum.ai — "GPT-5.6 Sol, Terra, Luna explained"
 - gist.github.com/IgorWarzocha — GPT-5.6 model-selection guide
+- miraflow.ai — "How to make AI images look like real photos: prompt tricks"
+- hedra.com — "Make AI images look like real photos: prompting"
+- datalab.flitto.com — "This orange-and-teal color bias shouts AI-generated"
 
 No published guide exists for gpt-5.4-mini or slug-specific prompting for
 gpt-5.4/5.5/daybreak; family guidance is applied there and marked (inferred).
