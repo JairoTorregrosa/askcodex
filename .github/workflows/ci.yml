@@ -1,0 +1,152 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# This workflow compiles and runs the pull request's code — untrusted input —
+# and pulls ~180 third-party crates whose build scripts execute here. It gets
+# a read-only token and nothing else. The governance gate is deliberately NOT
+# in this workflow: see agm.yml, which runs on pull_request_target precisely so
+# that the code being reviewed cannot rewrite its own reviewer.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # CI runs the mocked test suite only. askcodex's live integration tests are opt-in
+  # behind ASKCODEX_LIVE=1: they call the real Codex backend and read the caller's
+  # ~/.codex/auth.json. Never set ASKCODEX_LIVE here, and never add a credential
+  # secret to this workflow — askcodex has no API key, and CI has no account to use.
+
+jobs:
+  check:
+    # rust-toolchain.toml pins the channel and rustup honors that file over the
+    # toolchain this action selects, so these steps run on the pinned toolchain,
+    # not on floating stable. That is deliberate. It also means the MSRV floor
+    # declared in Cargo.toml is NOT exercised here — the msrv job below does that.
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      # SUPPLY CHAIN: every `uses:` below is pinned to a full 40-character
+      # commit SHA, with the version it corresponds to in a trailing comment.
+      # A tag or a branch is mutable — whoever can move it runs code in this
+      # job — so the comment is documentation and the SHA is the contract.
+      # Each SHA was resolved from the upstream repository on 2026-08-08, not
+      # recalled. To update one, resolve it again and never from memory:
+      #   git ls-remote https://github.com/actions/checkout       refs/tags/v4.x.y
+      #   git ls-remote https://github.com/Swatinem/rust-cache    refs/tags/v2.x.y
+      # (take the peeled `^{}` line when the tag is annotated).
+      #
+      # dtolnay/rust-toolchain has no version tags: `stable` is a BRANCH, and
+      # the action reads the toolchain to install from the REF NAME. Pinning it
+      # freezes the action's code — which is the point — but the `toolchain:`
+      # input below is then load-bearing, because the SHA no longer spells
+      # "stable". Do not delete it. The compiler this project actually builds
+      # with is governed by rust-toolchain.toml regardless.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable branch @ 2026-08-08
+        with:
+          # Restores what `@stable` used to say: this action reads its
+          # toolchain from the REF NAME, so pinning the ref to a SHA without
+          # this line would install whatever its default is.
+          toolchain: stable
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Format
+        # `cargo fmt` reads no dependency graph, so `--locked` does not apply.
+        run: cargo fmt --check
+      # `--locked` on everything that resolves dependencies: Cargo.lock is
+      # committed, so CI must build the exact graph the maintainer reviewed. A
+      # crate that publishes a new compatible version — or an upstream account
+      # that is compromised — cannot slip into a build here without a visible
+      # Cargo.lock change in the diff. Without it, cargo silently re-resolves
+      # and CI reports green on a graph nobody reviewed.
+      - name: Lint
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Test
+        # Mocked HTTP only (httpmock). ASKCODEX_LIVE is intentionally absent.
+        run: cargo test --locked
+      - name: Build
+        run: cargo build --release --locked
+
+  scripts:
+    # The two files agm.json puts in the CRITICAL zone that no other job
+    # touches. `.github/scripts/agm_gate.py` is the gate that reviews every
+    # pull request: it runs from the BASE branch under pull_request_target
+    # (see agm.yml), so a regression in it is invisible until it wrongly
+    # passes — or wrongly fails — somebody else's change, and this suite is
+    # the only thing watching it. `install.sh` is what writes to users'
+    # machines.
+    #
+    # Neither check needs a toolchain, a cache, or a network fetch: python3
+    # and shellcheck both ship on ubuntu-latest. Keep it that way — this job
+    # is the one that can still run when everything else is broken, and it
+    # pulls no third-party action beyond the pinned checkout.
+    runs-on: ubuntu-latest
+    steps:
+      # Pin this to a SHA too — see the note in the `check` job above.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Test the governance gate
+        # Standard library only, so there is no pip step and no dependency to
+        # poison. unittest's exit code fails the job; the suite asserts the
+        # gate's own exit codes (2 could-not-run, 1 failed, 0 pass) with a
+        # scrubbed environment, so nothing here writes to the job summary.
+        run: python3 -m unittest discover --start-directory .github/scripts --pattern 'test_*.py' --verbose
+      - name: Lint the installer
+        # install.sh declares #!/bin/sh and shellcheck reads the shebang, so
+        # this checks it as POSIX sh — the dialect it promises to be.
+        run: shellcheck install.sh
+
+  msrv:
+    # Cargo.toml declares rust-version — the oldest toolchain askcodex promises to
+    # compile on. rust-toolchain.toml pins a newer channel and outranks whatever
+    # a setup action selects, so without an explicit override no job would ever
+    # build at the floor and the promise would go untested while CI stayed green.
+    # This job overrides the pin, proves the override took effect, and only then
+    # compiles. It reads the number out of Cargo.toml so the two cannot drift.
+    runs-on: ubuntu-latest
+    steps:
+      # Pin this to a SHA too — see the note in the `check` job above.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Read the MSRV from Cargo.toml
+        id: msrv
+        run: |
+          set -eu
+          msrv="$(sed -n 's/^rust-version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' Cargo.toml | head -n1)"
+          case "$msrv" in
+            [0-9]*.[0-9]*) ;;
+            *)
+              echo "::error file=Cargo.toml::could not read rust-version from Cargo.toml (got '${msrv}') — refusing to guess an MSRV"
+              exit 1
+              ;;
+          esac
+          echo "msrv=${msrv}" >> "$GITHUB_OUTPUT"
+      - name: Install the MSRV toolchain and override the pin
+        env:
+          MSRV: ${{ steps.msrv.outputs.msrv }}
+        run: |
+          set -eu
+          rustup toolchain install "$MSRV" --profile minimal
+          # RUSTUP_TOOLCHAIN outranks rust-toolchain.toml. Without it the pinned
+          # channel wins silently and this job verifies nothing.
+          echo "RUSTUP_TOOLCHAIN=${MSRV}" >> "$GITHUB_ENV"
+      - name: Verify the override took effect
+        env:
+          MSRV: ${{ steps.msrv.outputs.msrv }}
+        run: |
+          set -eu
+          actual="$(rustc --version)"
+          echo "$actual"
+          case "$actual" in
+            "rustc ${MSRV} "* | "rustc ${MSRV}."*) ;;
+            *)
+              echo "::error::expected rustc ${MSRV}, got '${actual}' — the MSRV override is not in effect, so this job would not test the MSRV"
+              exit 1
+              ;;
+          esac
+      - name: Check at the MSRV floor
+        run: cargo check --all-targets --locked

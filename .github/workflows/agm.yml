@@ -1,0 +1,104 @@
+name: AGM
+
+# SECURITY — read this before editing.
+#
+# This workflow runs on `pull_request_target`, not `pull_request`. GitHub takes
+# BOTH this file and the default checkout from the BASE branch, so the gate that
+# runs is always the one already merged, never the one proposed. On
+# `pull_request` both the workflow and the script come from the pull request's
+# head, and a contributor could disable the gate that reviews their own change
+# — replace this step with `echo ok`, or rewrite `agm.json` and the gate's rules
+# — in the same pull request, and the required check would still go green.
+#
+# The price of that guarantee is the token: a `pull_request_target` job is
+# handed a token that has write scope in other contexts, so the pull-request
+# head is UNTRUSTED INPUT and nothing from it may ever execute here.
+# Concretely, in this workflow:
+#
+#   * never `actions/checkout` the head (or `refs/pull/N/merge`) over the base
+#     tree, and never add `ref:` to the checkout below;
+#   * never run `cargo`, `make`, `npm`, a git hook, or any script that lives in
+#     the pull request;
+#   * never `source` or `eval` a file from the head.
+#
+# The head is fetched for exactly one purpose: so `git diff` can NAME the files
+# it changes. Compiling and testing the contributor's code is `ci.yml`'s job —
+# that workflow runs on `pull_request` with a read-only token, which is where
+# untrusted code belongs. If you came here to add a build step, add it there.
+#
+# The pull-request body is untrusted too. It reaches the gate through the
+# environment and is never interpolated into a `run:` line, where a body
+# containing `$(...)` would run as shell.
+
+on:
+  pull_request_target:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      # SUPPLY CHAIN: pinned to a full commit SHA, resolved upstream on
+      # 2026-08-08. This job runs in the privileged pull_request_target
+      # context, so a mutable tag here would let whoever controls that tag run
+      # code beside a write-scoped token. Re-resolve, never recall:
+      #   git ls-remote https://github.com/actions/checkout refs/tags/v4.x.y
+      # (take the peeled `^{}` line when the tag is annotated).
+      - name: Check out the base branch — never the pull request
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # No `ref:`. On pull_request_target this checks out the base branch,
+          # which is where agm.json and the gate script must come from.
+          fetch-depth: 0
+          # Do not leave the write-scoped token in .git/config for a later step
+          # to reuse.
+          persist-credentials: false
+
+      - name: Fetch the pull request head as data
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          set -eu
+          # refs/pull/<n>/head lives in THIS repository even when the pull
+          # request comes from a fork, so no fork remote is added. The fetch is
+          # unauthenticated because the checkout above dropped the credential:
+          # that works on a public repository and fails loudly on a private one.
+          # If it ever fails, fix it with a read-only credential — never by
+          # persisting the pull_request_target token.
+          git fetch --no-tags --quiet "$REPO_URL" \
+            "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"
+          for sha in "$BASE_SHA" "$HEAD_SHA"; do
+            if ! git cat-file -e "${sha}^{commit}" 2>/dev/null; then
+              echo "::error::commit ${sha} is missing after the fetch — the pull request head probably moved while this job was queued. Refusing to compute a changed-file list from an incomplete history; re-run this check."
+              exit 1
+            fi
+          done
+
+      - name: List the files the pull request changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -eu
+          # -z keeps paths literal instead of shell-quoting odd names, so a path
+          # cannot smuggle itself out of a risk zone. This is the format
+          # agm_gate.py expects from CHANGED_FILES_FILE.
+          git diff -z --name-only "${BASE_SHA}...${HEAD_SHA}" \
+            > "${RUNNER_TEMP}/agm-changed-files"
+          echo "Files this pull request changes:"
+          git diff --name-only "${BASE_SHA}...${HEAD_SHA}"
+
+      - name: Governance gate
+        env:
+          # Data, not code. Never interpolate
+          # ${{ github.event.pull_request.body }} into a run: line.
+          BODY: ${{ github.event.pull_request.body }}
+          CHANGED_FILES_FILE: ${{ runner.temp }}/agm-changed-files
+        # This script comes from the base branch, like everything else here.
+        run: python3 .github/scripts/agm_gate.py

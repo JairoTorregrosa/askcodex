@@ -1,0 +1,32 @@
+{
+  "_note": "Response envelope for POST /codex/images/generations and /images/edits. WHAT IS VERIFIED: the field NAMES and the structure, checked against the openai/codex source (codex-rs/codex-api/src/images.rs, ImageResponse/ImageData) at the commit pinned in docs/PROTOCOL.md; and the 'size' value plus each decoded PNG byte length, captured live on 2026-08-07 (size as askcodex printed it from the response envelope, byte length as the decoded length of data[0].b64_json). WHAT IS NOT VERIFIED: the remaining envelope field VALUES (created, background, quality, output_format, usage). They come from an earlier reverse-engineering pass whose raw log is a private working document that is NOT part of this repository, and the raw envelope has never been re-dumped. Treat them as placeholders that show the SHAPE, not as observed data. [UNVERIFIED: created, background, quality, output_format, usage -- no evidence for these values is included in this repository]",
+  "generations_response": {
+    "created": "<u64 epoch \u2014 [verified-source] field present; value not captured, see _note>",
+    "data": [
+      {
+        "b64_json": "<base64 PNG, 708021 bytes decoded>"
+      }
+    ],
+    "background": "opaque",
+    "quality": "low",
+    "size": "1254x1254",
+    "output_format": "png",
+    "usage": {
+      "input_tokens": "<int>",
+      "output_tokens": "<int>",
+      "image_tokens": "<int>"
+    }
+  },
+  "edits_response": {
+    "created": "<u64 epoch>",
+    "data": [
+      {
+        "b64_json": "<base64 PNG, 1047605 bytes decoded>"
+      }
+    ],
+    "background": "opaque",
+    "quality": "low",
+    "size": "1254x1254",
+    "output_format": "png"
+  }
+}

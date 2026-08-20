@@ -1,0 +1,32 @@
+[package]
+name = "askcodex"
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.88"
+description = "Your ChatGPT/Codex subscription as a CLI."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/JairoTorregrosa/askcodex"
+readme = "README.md"
+keywords = ["codex", "chatgpt", "cli", "subscription", "image"]
+categories = ["command-line-utilities"]
+
+# Dependency set and versions are probe-validated (Wave 1 dependency probe).
+# Do NOT add, remove, or upgrade dependencies without re-running a probe.
+[dependencies]
+base64 = "0.23.1"
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.19"
+ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
+
+[dev-dependencies]
+httpmock = "0.8.3"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
