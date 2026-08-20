@@ -1,3 +1,5 @@
+<img src="assets/logo.png" alt="askcodex logo" width="96" align="right">
+
 # askcodex
 
 [![CI](https://github.com/JairoTorregrosa/askcodex/actions/workflows/ci.yml/badge.svg)](https://github.com/JairoTorregrosa/askcodex/actions/workflows/ci.yml)
