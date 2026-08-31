@@ -1,2 +1,6 @@
 /target
 __pycache__/
+
+# salidas sueltas de generacion de imagenes
+/out.png
+/*-*.png
