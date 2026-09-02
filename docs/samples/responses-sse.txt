@@ -11,10 +11,10 @@ event: response.content_part.added
 data: {"type":"response.content_part.added","content_index":0,"item_id":"msg_REDACTED","output_index":0,"part":{"type":"output_text","annotations":[],"logprobs":[],"text":""},"sequence_number":3}
 
 event: response.output_text.delta
-data: {"type":"response.output_text.delta","content_index":0,"delta":"CS","item_id":"msg_REDACTED","logprobs":[],"obfuscation":"KOCSLZn8MAoh7O","output_index":0,"sequence_number":4}
+data: {"type":"response.output_text.delta","content_index":0,"delta":"ASK","item_id":"msg_REDACTED","logprobs":[],"obfuscation":"KOCSLZn8MAoh7O","output_index":0,"sequence_number":4}
 
 event: response.output_text.delta
-data: {"type":"response.output_text.delta","content_index":0,"delta":"UB","item_id":"msg_REDACTED","logprobs":[],"obfuscation":"18k6sU10yv85v0","output_index":0,"sequence_number":5}
+data: {"type":"response.output_text.delta","content_index":0,"delta":"CODEX","item_id":"msg_REDACTED","logprobs":[],"obfuscation":"18k6sU10yv85v0","output_index":0,"sequence_number":5}
 
 event: response.output_text.delta
 data: {"type":"response.output_text.delta","content_index":0,"delta":"-","item_id":"msg_REDACTED","logprobs":[],"obfuscation":"iGJDgLwvN3eBMp7","output_index":0,"sequence_number":6}
@@ -29,12 +29,12 @@ event: response.output_text.delta
 data: {"type":"response.output_text.delta","content_index":0,"delta":"OK","item_id":"msg_REDACTED","logprobs":[],"obfuscation":"g2uYi563vB8Clu","output_index":0,"sequence_number":9}
 
 event: response.output_text.done
-data: {"type":"response.output_text.done","content_index":0,"item_id":"msg_REDACTED","logprobs":[],"output_index":0,"sequence_number":10,"text":"CSUB-VERIFY-OK"}
+data: {"type":"response.output_text.done","content_index":0,"item_id":"msg_REDACTED","logprobs":[],"output_index":0,"sequence_number":10,"text":"ASKCODEX-VERIFY-OK"}
 
 event: response.content_part.done
-data: {"type":"response.content_part.done","content_index":0,"item_id":"msg_REDACTED","output_index":0,"part":{"type":"output_text","annotations":[],"logprobs":[],"text":"CSUB-VERIFY-OK"},"sequence_number":11}
+data: {"type":"response.content_part.done","content_index":0,"item_id":"msg_REDACTED","output_index":0,"part":{"type":"output_text","annotations":[],"logprobs":[],"text":"ASKCODEX-VERIFY-OK"},"sequence_number":11}
 
 event: response.output_item.done
-data: {"type":"response.output_item.done","item":{"id":"msg_REDACTED","type":"message","status":"completed","content":[{"type":"output_text","annotations":[],"logprobs":[],"text":"CSUB-VERIFY-OK"}],"phase":"final_answer","role":"assistant"},"output_index":0,"sequence_number":12}
+data: {"type":"response.output_item.done","item":{"id":"msg_REDACTED","type":"message","status":"completed","content":[{"type":"output_text","annotations":[],"logprobs":[],"text":"ASKCODEX-VERIFY-OK"}],"phase":"final_answer","role":"assistant"},"output_index":0,"sequence_number":12}
 
 event: response.completed

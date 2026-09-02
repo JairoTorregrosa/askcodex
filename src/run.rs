@@ -1854,7 +1854,7 @@ mod tests {
 
     #[test]
     fn the_sse_fixture_still_carries_the_expected_deltas() {
-        assert_eq!(sample_deltas(), ["CS", "UB", "-", "VERIFY", "-", "OK"]);
+        assert_eq!(sample_deltas(), ["ASK", "CODEX", "-", "VERIFY", "-", "OK"]);
     }
 
     /// Build an [`endpoints::responses::AskAnswer`] with no usage object.
@@ -1889,11 +1889,11 @@ mod tests {
         // One write per delta, in order: nothing was buffered until the end.
         assert_eq!(
             out.writes,
-            ["CS", "UB", "-", "VERIFY", "-", "OK", "\n"],
+            ["ASK", "CODEX", "-", "VERIFY", "-", "OK", "\n"],
             "deltas must reach stdout as they arrive"
         );
         assert!(out.flushes >= 6, "each delta is flushed");
-        assert_eq!(out.text(), "CSUB-VERIFY-OK\n");
+        assert_eq!(out.text(), "ASKCODEX-VERIFY-OK\n");
     }
 
     #[test]
@@ -1990,7 +1990,7 @@ mod tests {
         let document = out.single_json_document();
         assert_eq!(
             document,
-            json!({"model": "gpt-5.4-mini", "effort": "medium", "text": "CSUB-VERIFY-OK", "usage": null})
+            json!({"model": "gpt-5.4-mini", "effort": "medium", "text": "ASKCODEX-VERIFY-OK", "usage": null})
         );
     }
 
@@ -2438,7 +2438,7 @@ mod tests {
             serde_json::to_value(AskOutput {
                 model: "gpt-5.4-mini".to_string(),
                 effort: Some("medium".to_string()),
-                text: "CSUB-VERIFY-OK".to_string(),
+                text: "ASKCODEX-VERIFY-OK".to_string(),
                 usage: None,
             })
             .unwrap(),

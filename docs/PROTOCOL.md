@@ -327,12 +327,12 @@ Parser rules (spec for implementers):
 Example redacted frames:
 ```
 event: response.output_text.delta
-data: {"type":"response.output_text.delta","content_index":0,"delta":"CS","item_id":"msg_REDACTED","logprobs":[],"obfuscation":"…","output_index":0,"sequence_number":4}
+data: {"type":"response.output_text.delta","content_index":0,"delta":"ASK","item_id":"msg_REDACTED","logprobs":[],"obfuscation":"…","output_index":0,"sequence_number":4}
 
 event: response.completed
 data: {"type":"response.completed","response":{ … }, "sequence_number":…}
 ```
-(Deltas in the verify run spelled `CS`,`UB`,`-`,`VERIFY`,`-`,`OK` = `CSUB-VERIFY-OK`.)
+(Deltas in the verify run spelled `ASK`,`CODEX`,`-`,`VERIFY`,`-`,`OK` = `ASKCODEX-VERIFY-OK`.)
 
 ---
 
