@@ -47,7 +47,7 @@ Note: `/me` and `/transcribe` live under `/backend-api` (**not** under `/codex`)
 
 ---
 
-## 2. Headers (sent on every ChatGPT-subscription API call)
+## 2. Headers (shared authentication; content type depends on the body)
 
 | Header | Value | Provenance |
 |---|---|---|
@@ -55,7 +55,7 @@ Note: `/me` and `/transcribe` live under `/backend-api` (**not** under `/codex`)
 | `ChatGPT-Account-Id` | `<tokens.account_id>` | `[verified-live 2026-08-07]` |
 | `originator` | `codex_cli_rs` | `[verified-source]` `DEFAULT_ORIGINATOR` |
 | `User-Agent` | codex-style UA (see shape below) | `[verified-source]` + `[verified-live]` (any codex-style UA accepted) |
-| `Content-Type` | `application/json` | `[verified-live]` (on POST bodies) |
+| `Content-Type` | `application/json` for JSON bodies; `multipart/form-data; boundary=<delimiter>` for `/transcribe` WAV uploads | `[verified-live]` JSON; multipart verified 2026-09-08 (§3.8) |
 | `Accept` | `application/json`, or `text/event-stream` for streaming | `[verified-live]` |
 
 `originator` header + name:

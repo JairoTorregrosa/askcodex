@@ -6,6 +6,7 @@
 //! askcodex whoami
 //! askcodex usage
 //! askcodex models [--client-version <v>]
+//! askcodex transcribe <file.wav>
 //! askcodex image create <prompt> [-o <file>]
 //! askcodex image edit  <prompt> -i <ref>... [-o <file>]
 //! askcodex ask <prompt> [--model <m>] [--effort <e>] [--instructions <s>]   (prompt "-" = stdin)
