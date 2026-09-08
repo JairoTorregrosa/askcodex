@@ -83,6 +83,23 @@ or accepted, anywhere, ever.**
 
 ## Decision log (probe-backed)
 
+### Audio transcription
+
+`transcribe <file.wav>` uploads a multipart `file` to `/transcribe`, on the
+same trusted backend origin. WAV is the format verified live; the client
+checks its RIFF/WAVE signature and caps input at 25 MiB to bound memory.
+This cap is a client policy, not a measured server limit. Input preparation
+precedes any credential refresh. A fixed multipart filename avoids leaking
+local paths or interpolating user-controlled headers; the chosen boundary
+must not occur in the audio bytes.
+
+Multipart and JSON share the same origin checks, credential headers,
+redirect policy, response-size bound, and one-shot 401 refresh/retry path.
+The prepared multipart bytes are replayed unchanged after refresh. No
+dependency or alternative authentication path is introduced. JSON output
+preserves unknown fields; a missing/null/non-string `text` is an error,
+while a present empty string is a valid transcript.
+
 Every dependency choice below was validated by a throwaway crate that
 compiled and ran the exact APIs against the resolved versions. That probe
 crate was scratch work and is **not** part of this repository, so each

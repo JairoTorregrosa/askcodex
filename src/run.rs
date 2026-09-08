@@ -17,6 +17,9 @@
 //!    prints `askcodex: error: <msg>` on stderr and exits non-zero.
 //!
 //! Output contract per command (text mode / `--json` mode):
+//! - `transcribe`: validate and prepare WAV before refresh or upload;
+//!   print transcript plus newline / complete raw JSON response. Missing
+//!   text is an error; an explicitly empty string is valid.
 //! - `whoami`: aligned `key : value` lines for email, name, plan,
 //!   account_id, user_id (absent -> `-`) / the `models::WhoamiOutput`
 //!   struct, pretty JSON.
@@ -176,6 +179,9 @@ enum Resolved {
 /// A command that talks to the ChatGPT backend.
 #[derive(Debug)]
 enum Backend {
+    Transcribe {
+        upload: endpoints::transcription::Upload,
+    },
     Whoami,
     Usage,
     Models {
@@ -211,6 +217,9 @@ enum Backend {
 /// fails on the malformed body instead of after a token round-trip.
 fn resolve(cmd: Cmd, stdin: &mut dyn Read) -> Result<Resolved, Error> {
     let resolved = match cmd {
+        Cmd::Transcribe { file } => Resolved::Backend(Backend::Transcribe {
+            upload: endpoints::transcription::Upload::read(&file)?,
+        }),
         Cmd::Whoami => Resolved::Backend(Backend::Whoami),
         Cmd::Usage => Resolved::Backend(Backend::Usage),
         Cmd::Models { client_version } => Resolved::Backend(Backend::Models { client_version }),
@@ -358,6 +367,14 @@ fn run_backend(
                 emit_json(out, &who)
             } else {
                 emit_human(out, &render_whoami(&who))
+            }
+        }
+        Backend::Transcribe { upload } => {
+            let (text, raw) = upload.transcribe(client)?;
+            if json {
+                emit_json(out, &raw)
+            } else {
+                writeln!(out, "{text}").map_err(Error::from)
             }
         }
         Backend::Usage => {
@@ -1854,7 +1871,7 @@ mod tests {
 
     #[test]
     fn the_sse_fixture_still_carries_the_expected_deltas() {
-        assert_eq!(sample_deltas(), ["CS", "UB", "-", "VERIFY", "-", "OK"]);
+        assert_eq!(sample_deltas(), ["ASK", "CODEX", "-", "VERIFY", "-", "OK"]);
     }
 
     /// Build an [`endpoints::responses::AskAnswer`] with no usage object.
@@ -1889,11 +1906,11 @@ mod tests {
         // One write per delta, in order: nothing was buffered until the end.
         assert_eq!(
             out.writes,
-            ["CS", "UB", "-", "VERIFY", "-", "OK", "\n"],
+            ["ASK", "CODEX", "-", "VERIFY", "-", "OK", "\n"],
             "deltas must reach stdout as they arrive"
         );
         assert!(out.flushes >= 6, "each delta is flushed");
-        assert_eq!(out.text(), "CSUB-VERIFY-OK\n");
+        assert_eq!(out.text(), "ASKCODEX-VERIFY-OK\n");
     }
 
     #[test]
@@ -1990,7 +2007,7 @@ mod tests {
         let document = out.single_json_document();
         assert_eq!(
             document,
-            json!({"model": "gpt-5.4-mini", "effort": "medium", "text": "CSUB-VERIFY-OK", "usage": null})
+            json!({"model": "gpt-5.4-mini", "effort": "medium", "text": "ASKCODEX-VERIFY-OK", "usage": null})
         );
     }
 
@@ -2204,7 +2221,10 @@ mod tests {
         // One write (and one flush) per line, as it arrives.
         assert_eq!(out.writes.len(), out.flushes);
         assert!(out.writes.len() > 20, "writes: {}", out.writes.len());
-        assert_eq!(out.writes[0], "event: response.created\n");
+        assert_eq!(
+            out.writes[0],
+            ": Provenance: adapted from the redacted 2026-08-07 capture, not a verbatim transcript.\n"
+        );
     }
 
     #[test]
@@ -2438,7 +2458,7 @@ mod tests {
             serde_json::to_value(AskOutput {
                 model: "gpt-5.4-mini".to_string(),
                 effort: Some("medium".to_string()),
-                text: "CSUB-VERIFY-OK".to_string(),
+                text: "ASKCODEX-VERIFY-OK".to_string(),
                 usage: None,
             })
             .unwrap(),

@@ -6,6 +6,7 @@
 //! askcodex whoami
 //! askcodex usage
 //! askcodex models [--client-version <v>]
+//! askcodex transcribe <file.wav>
 //! askcodex image create <prompt> [-o <file>]
 //! askcodex image edit  <prompt> -i <ref>... [-o <file>]
 //! askcodex ask <prompt> [--model <m>] [--effort <e>] [--instructions <s>]   (prompt "-" = stdin)
@@ -65,6 +66,11 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Cmd {
+    /// Transcribe a WAV audio file to text.
+    Transcribe {
+        /// WAV audio file. Convert other formats to WAV before uploading.
+        file: PathBuf,
+    },
     /// Show account identity and plan.
     Whoami,
 

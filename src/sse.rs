@@ -139,8 +139,8 @@ mod tests {
     use std::rc::Rc;
 
     // -----------------------------------------------------------------
-    // Fixtures. Payloads below are verbatim (already-redacted) lines from
-    // the live capture in docs/samples/responses-sse.txt unless a comment
+    // Fixtures. Payloads below come from the adapted, redacted fixture in
+    // docs/samples/responses-sse.txt (see its provenance header) unless a comment
     // says otherwise. Nothing here reads the filesystem, the network, or
     // any environment variable, so no test in this module can reach the
     // real ~/.codex.
@@ -155,29 +155,29 @@ mod tests {
     /// of fields this layer never looks at); shape and key order preserved.
     const CREATED: &str = r#"{"type":"response.created","response":{"id":"resp_REDACTED","object":"response","status":"in_progress","model":"gpt-5.4-mini-2026-03-17","store":false},"sequence_number":0}"#;
     const IN_PROGRESS: &str = r#"{"type":"response.in_progress","response":{"id":"resp_REDACTED","object":"response","status":"in_progress"},"sequence_number":1}"#;
-    /// Verbatim from the capture.
+    /// From the adapted fixture described above.
     const ITEM_ADDED: &str = r#"{"type":"response.output_item.added","item":{"id":"msg_REDACTED","type":"message","status":"in_progress","content":[],"phase":"final_answer","role":"assistant"},"output_index":0,"sequence_number":2}"#;
-    /// Verbatim from the capture.
+    /// From the adapted fixture described above.
     const PART_ADDED: &str = r#"{"type":"response.content_part.added","content_index":0,"item_id":"msg_REDACTED","output_index":0,"part":{"type":"output_text","annotations":[],"logprobs":[],"text":""},"sequence_number":3}"#;
-    /// Verbatim from the capture.
-    const TEXT_DONE: &str = r#"{"type":"response.output_text.done","content_index":0,"item_id":"msg_REDACTED","logprobs":[],"output_index":0,"sequence_number":10,"text":"CSUB-VERIFY-OK"}"#;
-    /// Verbatim from the capture.
-    const PART_DONE: &str = r#"{"type":"response.content_part.done","content_index":0,"item_id":"msg_REDACTED","output_index":0,"part":{"type":"output_text","annotations":[],"logprobs":[],"text":"CSUB-VERIFY-OK"},"sequence_number":11}"#;
+    /// Adapted fixture: text is a synthetic replacement for CSUB-VERIFY-OK.
+    const TEXT_DONE: &str = r#"{"type":"response.output_text.done","content_index":0,"item_id":"msg_REDACTED","logprobs":[],"output_index":0,"sequence_number":10,"text":"ASKCODEX-VERIFY-OK"}"#;
+    /// Adapted fixture: text is a synthetic replacement for CSUB-VERIFY-OK.
+    const PART_DONE: &str = r#"{"type":"response.content_part.done","content_index":0,"item_id":"msg_REDACTED","output_index":0,"part":{"type":"output_text","annotations":[],"logprobs":[],"text":"ASKCODEX-VERIFY-OK"},"sequence_number":11}"#;
     /// SYNTHESIZED: the live capture stops at the bare
     /// `event: response.completed` line, so its `data:` line is
     /// reconstructed from the shape documented in PROTOCOL.md section 4.
     const COMPLETED: &str = r#"{"type":"response.completed","response":{"id":"resp_REDACTED","object":"response","status":"completed"},"sequence_number":13}"#;
 
-    /// The six deltas of the live verify run, verbatim (they spell
-    /// `CSUB-VERIFY-OK`).
+    /// Six deltas adapted from the live run: CS/UB became ASK/CODEX.
+    /// They spell the synthetic fixture answer `ASKCODEX-VERIFY-OK`.
     const DELTAS: [(&str, &str); 6] = [
         (
-            "CS",
-            r#"{"type":"response.output_text.delta","content_index":0,"delta":"CS","item_id":"msg_REDACTED","logprobs":[],"obfuscation":"KOCSLZn8MAoh7O","output_index":0,"sequence_number":4}"#,
+            "ASK",
+            r#"{"type":"response.output_text.delta","content_index":0,"delta":"ASK","item_id":"msg_REDACTED","logprobs":[],"obfuscation":"KOCSLZn8MAoh7O","output_index":0,"sequence_number":4}"#,
         ),
         (
-            "UB",
-            r#"{"type":"response.output_text.delta","content_index":0,"delta":"UB","item_id":"msg_REDACTED","logprobs":[],"obfuscation":"18k6sU10yv85v0","output_index":0,"sequence_number":5}"#,
+            "CODEX",
+            r#"{"type":"response.output_text.delta","content_index":0,"delta":"CODEX","item_id":"msg_REDACTED","logprobs":[],"obfuscation":"18k6sU10yv85v0","output_index":0,"sequence_number":5}"#,
         ),
         (
             "-",
@@ -264,7 +264,7 @@ mod tests {
                 ResponsesSseEvent::Other => {}
             }
         }
-        assert_eq!(text, "CSUB-VERIFY-OK");
+        assert_eq!(text, "ASKCODEX-VERIFY-OK");
         assert!(completed);
         assert!(matches!(
             events.last(),
@@ -327,7 +327,7 @@ mod tests {
             vec![
                 ResponsesSseEvent::Other,
                 ResponsesSseEvent::Other,
-                ResponsesSseEvent::OutputTextDelta("CS".into()),
+                ResponsesSseEvent::OutputTextDelta("ASK".into()),
                 ResponsesSseEvent::Completed {
                     raw: serde_json::from_str(COMPLETED).unwrap()
                 },
@@ -414,7 +414,7 @@ mod tests {
         // Framing does not parse JSON, so a truncated payload reaches the
         // caller unchanged instead of being silently coalesced or skipped
         // inside this layer.
-        let broken = r#"{"type":"response.output_text.delta","delta":"CS"#;
+        let broken = r#"{"type":"response.output_text.delta","delta":"ASK"#;
         let mut stream = frame("response.created", CREATED);
         stream.push_str(&frame("response.output_text.delta", broken));
         stream.push_str(&frame("response.completed", COMPLETED));

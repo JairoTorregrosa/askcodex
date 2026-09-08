@@ -226,7 +226,8 @@ mod tests {
     // Fixtures
     // -----------------------------------------------------------------
 
-    /// The REAL captured stream, verbatim. It ends at a bare
+    /// Adapted capture: identifiers are redacted and the sentinel text is
+    /// synthetic (see the fixture's provenance header). It ends at a bare
     /// `event: response.completed` line with no `data:` line because the
     /// capture was cut short — so the file as it stands is precisely the
     /// truncated-stream fixture, and the happy path is this plus the
@@ -237,9 +238,9 @@ mod tests {
     /// capture stops before the terminal event's `data:` line.
     const COMPLETED: &str = r#"{"type":"response.completed","response":{"id":"resp_REDACTED","object":"response","status":"completed"},"sequence_number":13}"#;
 
-    /// The answer the live run streamed, in six deltas.
-    const LIVE_ANSWER: &str = "CSUB-VERIFY-OK";
-    const LIVE_DELTAS: [&str; 6] = ["CS", "UB", "-", "VERIFY", "-", "OK"];
+    /// Synthetic replacement for the live run's CSUB-VERIFY-OK, in six deltas.
+    const LIVE_ANSWER: &str = "ASKCODEX-VERIFY-OK";
+    const LIVE_DELTAS: [&str; 6] = ["ASK", "CODEX", "-", "VERIFY", "-", "OK"];
 
     /// One wire frame: `event:` line, `data:` line, blank line.
     fn frame(event: &str, data: &str) -> String {
@@ -265,7 +266,7 @@ mod tests {
         frame("response.completed", COMPLETED)
     }
 
-    /// The live capture completed: the raw trace (which ends with the
+    /// The adapted fixture completed: the trace (which ends with the
     /// bare `event: response.completed` line, no trailing newline) plus the
     /// `data:` line it was missing.
     fn happy_stream() -> String {
@@ -297,7 +298,12 @@ mod tests {
     }
 
     fn prompt() -> ResponsesRequest {
-        ResponsesRequest::user_text(config::DEFAULT_ASK_MODEL, "say CSUB-VERIFY-OK", None, None)
+        ResponsesRequest::user_text(
+            config::DEFAULT_ASK_MODEL,
+            "say ASKCODEX-VERIFY-OK",
+            None,
+            None,
+        )
     }
 
     /// Serve `stream` as `text/event-stream` and run `ask_at` against it.
@@ -426,7 +432,7 @@ mod tests {
                     "input": [{
                         "type": "message",
                         "role": "user",
-                        "content": [{"type": "input_text", "text": "say CSUB-VERIFY-OK"}],
+                        "content": [{"type": "input_text", "text": "say ASKCODEX-VERIFY-OK"}],
                     }],
                     "stream": true,
                     "store": false,
@@ -437,7 +443,8 @@ mod tests {
         });
 
         let mut client = client();
-        let request = ResponsesRequest::user_text("gpt-5.4-mini", "say CSUB-VERIFY-OK", None, None);
+        let request =
+            ResponsesRequest::user_text("gpt-5.4-mini", "say ASKCODEX-VERIFY-OK", None, None);
         let answer = ask_at(
             &mut client,
             &server.url("/codex/responses"),
@@ -580,8 +587,8 @@ mod tests {
         let failed = r#"{"type":"response.failed","response":{"id":"resp_REDACTED","status":"failed","error":{"code":"server_error","message":"boom"}},"sequence_number":6}"#;
         let stream = format!(
             "{}{}{}",
-            delta_frame("CS", 4),
-            delta_frame("UB", 5),
+            delta_frame("ASK", 4),
+            delta_frame("CODEX", 5),
             frame("response.failed", failed),
         );
 
@@ -592,7 +599,7 @@ mod tests {
         assert!(detail.contains("boom"), "detail was {detail:?}");
         // Deltas were pushed before the outcome was known — and the
         // fragment is still NOT returned as an answer.
-        assert_eq!(deltas, vec!["CS".to_string(), "UB".to_string()]);
+        assert_eq!(deltas, vec!["ASK".to_string(), "CODEX".to_string()]);
     }
 
     #[test]
@@ -601,7 +608,7 @@ mod tests {
             let event =
                 json!({"type": name, "code": "rate_limit_exceeded", "message": "slow down"})
                     .to_string();
-            let stream = format!("{}{}", delta_frame("CS", 4), frame(name, &event));
+            let stream = format!("{}{}", delta_frame("ASK", 4), frame(name, &event));
 
             let detail = expect_sse_error(run_ask(&stream, &prompt()).0);
             assert!(
@@ -664,7 +671,7 @@ mod tests {
 
     #[test]
     fn a_stream_that_ends_without_completed_is_an_error_not_a_short_answer() {
-        // The raw capture: every delta of the live answer, then the wire
+        // The adapted capture: every delta of the fixture answer, then the wire
         // stops before the terminal event's payload.
         let (result, deltas) = run_ask(LIVE_TRACE, &prompt());
 
@@ -692,10 +699,10 @@ mod tests {
     fn malformed_json_on_a_data_line_aborts_instead_of_being_skipped() {
         // A truncated delta payload: the one case where skipping would
         // silently drop part of the answer.
-        let broken = r#"{"type":"response.output_text.delta","delta":"UB"#;
+        let broken = r#"{"type":"response.output_text.delta","delta":"CODEX"#;
         let stream = format!(
             "{}{}{}{}",
-            delta_frame("CS", 4),
+            delta_frame("ASK", 4),
             frame("response.output_text.delta", broken),
             delta_frame("OK", 6),
             completed_frame(),
@@ -709,10 +716,13 @@ mod tests {
             "detail was {detail:?}"
         );
         // The offending payload is quoted so the failure is diagnosable.
-        assert!(detail.contains(r#""delta":"UB"#), "detail was {detail:?}");
+        assert!(
+            detail.contains(r#""delta":"CODEX"#),
+            "detail was {detail:?}"
+        );
         // Consumption stopped there: the later delta never reached the
         // caller and no partial answer was returned.
-        assert_eq!(deltas, vec!["CS".to_string()]);
+        assert_eq!(deltas, vec!["ASK".to_string()]);
     }
 
     #[test]
@@ -729,7 +739,7 @@ mod tests {
         ] {
             let stream = format!(
                 "{}{}{}",
-                delta_frame("CS", 4),
+                delta_frame("ASK", 4),
                 frame("response.unknown", broken),
                 completed_frame(),
             );
@@ -768,19 +778,19 @@ mod tests {
         let untyped = r#"{"sequence_number":100,"delta":"no type field"}"#;
         let stream = format!(
             "{}{}{}{}{}",
-            delta_frame("CS", 4),
+            delta_frame("ASK", 4),
             frame("response.some.future.event", future),
             frame("response.weird", untyped),
-            delta_frame("UB", 5),
+            delta_frame("CODEX", 5),
             completed_frame(),
         );
 
         let (result, deltas) = run_ask(&stream, &prompt());
 
-        assert_eq!(result.unwrap().text, "CSUB");
+        assert_eq!(result.unwrap().text, "ASKCODEX");
         // Crucially, the unknown events' own `delta` fields were NOT
         // mistaken for answer text.
-        assert_eq!(deltas, vec!["CS".to_string(), "UB".to_string()]);
+        assert_eq!(deltas, vec!["ASK".to_string(), "CODEX".to_string()]);
     }
 
     #[test]
@@ -790,27 +800,27 @@ mod tests {
         // a stream that completes normally.
         let stream = format!(
             "{}data: [DONE]\n\n{}",
-            delta_frame("CS", 4),
+            delta_frame("ASK", 4),
             completed_frame(),
         );
 
         let (result, deltas) = run_ask(&stream, &prompt());
-        assert_eq!(result.unwrap().text, "CS");
-        assert_eq!(deltas, vec!["CS".to_string()]);
+        assert_eq!(result.unwrap().text, "ASK");
+        assert_eq!(deltas, vec!["ASK".to_string()]);
     }
 
     #[test]
     fn nothing_after_response_completed_is_consumed() {
         let stream = format!(
             "{}{}{}",
-            delta_frame("CS", 4),
+            delta_frame("ASK", 4),
             completed_frame(),
             delta_frame("MUST NOT APPEAR", 99),
         );
 
         let (result, deltas) = run_ask(&stream, &prompt());
-        assert_eq!(result.unwrap().text, "CS");
-        assert_eq!(deltas, vec!["CS".to_string()]);
+        assert_eq!(result.unwrap().text, "ASK");
+        assert_eq!(deltas, vec!["ASK".to_string()]);
     }
 
     // -----------------------------------------------------------------
@@ -861,7 +871,7 @@ mod tests {
 
     #[test]
     fn a_broken_connection_surfaces_as_io_and_never_as_a_finished_answer() {
-        let stream = format!("{}{}", delta_frame("CS", 4), delta_frame("UB", 5));
+        let stream = format!("{}{}", delta_frame("ASK", 4), delta_frame("CODEX", 5));
         let reader = BufReader::new(BreakingReader {
             inner: Cursor::new(stream.into_bytes()),
         });
@@ -876,7 +886,7 @@ mod tests {
             Err(Error::Io(e)) => assert_eq!(e.kind(), std::io::ErrorKind::ConnectionReset),
             other => panic!("expected Error::Io, got {other:?}"),
         }
-        assert_eq!(deltas, vec!["CS".to_string(), "UB".to_string()]);
+        assert_eq!(deltas, vec!["ASK".to_string(), "CODEX".to_string()]);
     }
 
     // -----------------------------------------------------------------

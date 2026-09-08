@@ -119,6 +119,13 @@ pub struct Client {
     token_url: String,
 }
 
+/// Borrowed bodies can be replayed unchanged after the existing one-shot refresh.
+#[derive(Clone, Copy)]
+enum RequestBody<'a> {
+    Json(&'a Value),
+    Bytes(&'a [u8]),
+}
+
 impl Client {
     /// Build the agent (config above) and wrap the loaded credentials.
     /// `no_refresh` disables BOTH the pre-flight refresh and the
@@ -252,14 +259,37 @@ impl Client {
         path: &str,
         body: Option<&Value>,
     ) -> Result<Value, Error> {
-        let response = self.send_with_refresh(&method, path, body, &[])?;
+        let response = self.send_with_refresh(&method, path, body.map(RequestBody::Json), &[])?;
+        Self::decode_json_response(&method, path, response)
+    }
 
+    /// Post a prepared multipart upload through the same origin/auth/refresh guards.
+    pub fn post_multipart(
+        &mut self,
+        path: &str,
+        content_type: &str,
+        bytes: &[u8],
+    ) -> Result<Value, Error> {
+        let response = self.send_with_refresh(
+            &Method::POST,
+            path,
+            Some(RequestBody::Bytes(bytes)),
+            &[("Content-Type", content_type)],
+        )?;
+        Self::decode_json_response(&Method::POST, path, response)
+    }
+
+    fn decode_json_response(
+        method: &Method,
+        path: &str,
+        response: Response<Body>,
+    ) -> Result<Value, Error> {
         let status = response.status().as_u16();
         let (_parts, response_body) = response.into_parts();
 
         if !is_success(status) {
             return Err(http_status_error(
-                &method,
+                method,
                 path,
                 status,
                 snippet_of_body(response_body),
@@ -315,7 +345,8 @@ impl Client {
         body: Option<&Value>,
     ) -> Result<Box<dyn BufRead>, Error> {
         let extra = [("Accept", ACCEPT_SSE), ("OpenAI-Beta", OPENAI_BETA)];
-        let response = self.send_with_refresh(&method, path, body, &extra)?;
+        let response =
+            self.send_with_refresh(&method, path, body.map(RequestBody::Json), &extra)?;
 
         let status = response.status().as_u16();
         let (_parts, response_body) = response.into_parts();
@@ -351,7 +382,7 @@ impl Client {
         &mut self,
         method: &Method,
         path: &str,
-        body: Option<&Value>,
+        body: Option<RequestBody<'_>>,
         extra_headers: &[(&str, &str)],
     ) -> Result<Response<Body>, Error> {
         let url = resolve_target(path)?;
@@ -403,7 +434,7 @@ impl Client {
         &self,
         method: &Method,
         url: &str,
-        body: Option<&Value>,
+        body: Option<RequestBody<'_>>,
         extra_headers: &[(&str, &str)],
     ) -> Result<Response<Body>, Error> {
         // ORIGIN SCOPING, first statement in the function: no credential
@@ -442,9 +473,13 @@ impl Client {
         }
 
         let response = match body {
-            Some(value) => {
+            Some(RequestBody::Json(value)) => {
                 set_header(&mut builder, "Content-Type", JSON_CONTENT_TYPE)?;
                 let bytes = serde_json::to_vec(value)?;
+                let request = builder.body(bytes).map_err(http_error)?;
+                self.agent.run(request)?
+            }
+            Some(RequestBody::Bytes(bytes)) => {
                 let request = builder.body(bytes).map_err(http_error)?;
                 self.agent.run(request)?
             }
@@ -1121,6 +1156,11 @@ mod tests {
         assert!(!err.to_string().contains(FAKE_ACCESS_TOKEN));
         assert!(!err.to_string().contains(FAKE_ACCOUNT_ID));
 
+        let err = client
+            .post_multipart(foreign, "multipart/form-data; boundary=x", b"--x--\r\n")
+            .unwrap_err();
+        assert!(matches!(err, Error::UntrustedOrigin { .. }));
+
         // The streaming path is the same gate, not a second one.
         let err = expect_stream_error(client.request_stream(Method::POST, foreign, None));
         assert!(
@@ -1485,6 +1525,82 @@ mod tests {
     }
 
     // -- 401 policy ------------------------------------------------------
+
+    #[test]
+    fn multipart_replays_identical_bytes_after_one_refresh() {
+        let _guard = lock_codex_home();
+        let _home = reset_codex_home();
+        let server = MockServer::start();
+        let body = b"--test\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\n\r\nRIFF\0\xffWAVE\r\n--test--\r\n";
+        let mime = "multipart/form-data; boundary=test";
+        let first = server.mock(|when, then| {
+            when.method(POST)
+                .path("/transcribe")
+                .header("authorization", format!("Bearer {FAKE_ACCESS_TOKEN}"))
+                .header("content-type", mime)
+                .is_true(move |request| request.body_ref() == body.as_slice());
+            then.status(401).body("expired");
+        });
+        let second = server.mock(|when, then| {
+            when.method(POST)
+                .path("/transcribe")
+                .header("authorization", format!("Bearer {FAKE_ROTATED_TOKEN}"))
+                .header("content-type", mime)
+                .is_true(move |request| request.body_ref() == body.as_slice());
+            then.status(200)
+                .json_body(json!({"text":"hello", "future":42}));
+        });
+        let token = server.mock(|when, then| {
+            when.method(POST).path("/oauth/token");
+            then.status(200).json_body(
+                json!({"access_token":FAKE_ROTATED_TOKEN, "refresh_token":"rotated-refresh-token"}),
+            );
+        });
+        let mut c = client_with_token_url(false, &server.url("/oauth/token"));
+        let result = c
+            .post_multipart(&server.url("/transcribe"), mime, body)
+            .unwrap();
+        assert_eq!(result, json!({"text":"hello", "future":42}));
+        assert_eq!((first.calls(), second.calls(), token.calls()), (1, 1, 1));
+    }
+
+    #[test]
+    fn multipart_no_refresh_and_redirect_errors_are_final() {
+        let server = MockServer::start();
+        let denied = server.mock(|when, then| {
+            when.method(POST).path("/denied");
+            then.status(401).body("expired");
+        });
+        let target = server.mock(|when, then| {
+            when.path("/target");
+            then.status(200).json_body(json!({"text":"unreachable"}));
+        });
+        let redirect = server.mock(|when, then| {
+            when.method(POST).path("/redirect");
+            then.status(307).header("Location", server.url("/target"));
+        });
+        let mut c = client(true);
+        assert!(matches!(
+            c.post_multipart(
+                &server.url("/denied"),
+                "multipart/form-data; boundary=x",
+                b"--x--\r\n"
+            ),
+            Err(Error::HttpStatus { status: 401, .. })
+        ));
+        assert!(matches!(
+            c.post_multipart(
+                &server.url("/redirect"),
+                "multipart/form-data; boundary=x",
+                b"--x--\r\n"
+            ),
+            Err(Error::HttpStatus { status: 307, .. })
+        ));
+        assert_eq!(
+            (denied.calls(), redirect.calls(), target.calls()),
+            (1, 1, 0)
+        );
+    }
     //
     // These drive the REAL `auth::refresh_with_endpoint` (no test double)
     // through `Client::with_token_url`: the OAuth POST goes to an httpmock

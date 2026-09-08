@@ -11,3 +11,4 @@
 pub mod account;
 pub mod images;
 pub mod responses;
+pub mod transcription;

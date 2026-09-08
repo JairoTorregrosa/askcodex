@@ -42,12 +42,12 @@ config file, or a flag — see §2.1 for why that is a rule rather than an omiss
 `[verified-source https://github.com/openai/codex/blob/2e3a1702c2e7adea5f2ae9ea2799c625024b4fda/codex-rs/model-provider-info/src/lib.rs#L37]`
 `pub const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";`
 
-Note: `/me` lives under `/backend-api` (**not** under `/codex`); all other endpoints below are under
+Note: `/me` and `/transcribe` live under `/backend-api` (**not** under `/codex`); the other endpoints below are under
 `/codex`.
 
 ---
 
-## 2. Headers (sent on every ChatGPT-subscription API call)
+## 2. Headers (shared authentication; content type depends on the body)
 
 | Header | Value | Provenance |
 |---|---|---|
@@ -55,7 +55,7 @@ Note: `/me` lives under `/backend-api` (**not** under `/codex`); all other endpo
 | `ChatGPT-Account-Id` | `<tokens.account_id>` | `[verified-live 2026-08-07]` |
 | `originator` | `codex_cli_rs` | `[verified-source]` `DEFAULT_ORIGINATOR` |
 | `User-Agent` | codex-style UA (see shape below) | `[verified-source]` + `[verified-live]` (any codex-style UA accepted) |
-| `Content-Type` | `application/json` | `[verified-live]` (on POST bodies) |
+| `Content-Type` | `application/json` for JSON bodies; `multipart/form-data; boundary=<delimiter>` for `/transcribe` WAV uploads | `[verified-live]` JSON; multipart verified 2026-09-08 (§3.8) |
 | `Accept` | `application/json`, or `text/event-stream` for streaming | `[verified-live]` |
 
 `originator` header + name:
@@ -263,7 +263,7 @@ envelope when the image path is next re-probed]`.
 
 ### 3.7 `POST /codex/responses` — streaming text completion (SSE)
 `[verified-live 2026-08-07]` (one real `askcodex ask`, plus the same call through `askcodex raw --stream`;
-the captured stream is [`samples/responses-sse.txt`](samples/responses-sse.txt)). Request:
+an adapted fixture is [`samples/responses-sse.txt`](samples/responses-sse.txt); see §4 for provenance). Request:
 ```json
 { "model": "<slug>",
   "input": [ { "type": "message", "role": "user",
@@ -276,10 +276,45 @@ Extra headers: `OpenAI-Beta: responses=experimental`, `Accept: text/event-stream
 
 ---
 
+### 3.8 `POST /transcribe` — audio → text
+
+`[verified-live 2026-09-08]` A synthetic WAV containing “This is a transcription
+test. The blue notebook contains seven pages.” returned HTTP 200 and:
+
+```json
+{"text":"This is a transcription test. The blue notebook contains seven pages."}
+```
+
+The route is `https://chatgpt.com/backend-api/transcribe`, outside `/codex`.
+The request is `multipart/form-data` with one part named `file`, filename
+`audio.wav`, content type `audio/wav`, and the unmodified WAV bytes. No model
+or language field was supplied. The Rust client succeeded with askcodex's
+existing subscription authorization, account, originator, and User-Agent
+headers. Credentials were read only; every live invocation disabled refresh.
+
+Discovery lead: [Codex Desktop dictation report](https://github.com/openai/codex/issues/20668).
+Initial Node/fetch diagnostic returned a non-JSON 403. curl multipart and the
+implemented Rust/ureq path succeeded. This does not establish the cause of
+the Node failure, a required Desktop User-Agent, or a need for an alternate
+transport. Local evidence: `/tmp/askcodex/transcribe-20260908/` (`probe-curl.json`,
+`rust-result.json`, synthetic `sample.wav`).
+
+`text` is parsed as an optional string and required for a usable result;
+missing/null/wrong-type values fail. A present empty string is preserved.
+`--json` returns the complete response object, retaining unknown fields.
+WAV is the only format exercised here. The 25 MiB cap is imposed locally
+to bound memory, not claimed as the server's maximum. Timestamps, language
+selection, speaker labels, other formats, duration limits, and model identity
+remain unverified. Multipart replay on a single 401 refresh is covered with
+offline mocks, not by rotating the user's real credentials.
+
 ## 4. SSE framing contract (for the parser in `src/sse.rs`)
 
-`[verified-live 2026-08-07]` — captured trace in
-[`samples/responses-sse.txt`](samples/responses-sse.txt) (a real stream with the ids redacted). That
+`[verified-live 2026-08-07]` — framing was observed in a real stream. The fixture in
+[`samples/responses-sse.txt`](samples/responses-sse.txt) is adapted from that capture:
+identifiers are redacted, and the original `CS`/`UB` deltas and `CSUB-VERIFY-OK`
+text fields were changed to `ASK`/`CODEX` and `ASKCODEX-VERIFY-OK`. These text
+values are synthetic; the other event metadata remains from the capture. That
 file is also the fixture `src/endpoints/responses.rs` and `src/run.rs` parse in their tests, so this
 contract and the parser cannot drift apart silently. The capture stops on the terminal
 `event: response.completed` line, before that frame's `data:` line, which is why it doubles as the
@@ -327,12 +362,13 @@ Parser rules (spec for implementers):
 Example redacted frames:
 ```
 event: response.output_text.delta
-data: {"type":"response.output_text.delta","content_index":0,"delta":"CS","item_id":"msg_REDACTED","logprobs":[],"obfuscation":"…","output_index":0,"sequence_number":4}
+data: {"type":"response.output_text.delta","content_index":0,"delta":"ASK","item_id":"msg_REDACTED","logprobs":[],"obfuscation":"…","output_index":0,"sequence_number":4}
 
 event: response.completed
 data: {"type":"response.completed","response":{ … }, "sequence_number":…}
 ```
-(Deltas in the verify run spelled `CS`,`UB`,`-`,`VERIFY`,`-`,`OK` = `CSUB-VERIFY-OK`.)
+(The adapted fixture spells `ASK`,`CODEX`,`-`,`VERIFY`,`-`,`OK` = `ASKCODEX-VERIFY-OK`;
+the original verify run spelled `CS`,`UB`,`-`,`VERIFY`,`-`,`OK` = `CSUB-VERIFY-OK`.)
 
 ---
 

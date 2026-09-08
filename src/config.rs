@@ -16,6 +16,9 @@ pub const BASE_URL: &str = "https://chatgpt.com/backend-api";
 /// Codex-specific endpoints (`/usage`, `/models`, `/images/*`, `/responses`).
 pub const CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 
+/// Standalone dictation route, outside the /codex prefix.
+pub const TRANSCRIBE_PATH: &str = "/transcribe";
+
 /// OAuth token refresh endpoint. The ONLY non-chatgpt.com host askcodex talks to.
 ///
 /// This is a compile-time constant on purpose and must stay one: the

@@ -30,6 +30,14 @@ fn persist_recovery_hint(path: &Path, backup: &Option<PathBuf>) -> String {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
+    #[error("failed to read audio file {path}: {source}")]
+    AudioFileUnreadable {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("invalid audio: {reason}")]
+    InvalidAudio { reason: &'static str },
     /// Neither `$CODEX_HOME` nor `$HOME` is set and non-empty.
     #[error(
         "cannot resolve the codex home directory: neither $CODEX_HOME nor $HOME is set.\n\
