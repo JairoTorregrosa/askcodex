@@ -139,8 +139,8 @@ mod tests {
     use std::rc::Rc;
 
     // -----------------------------------------------------------------
-    // Fixtures. Payloads below are verbatim (already-redacted) lines from
-    // the live capture in docs/samples/responses-sse.txt unless a comment
+    // Fixtures. Payloads below come from the adapted, redacted fixture in
+    // docs/samples/responses-sse.txt (see its provenance header) unless a comment
     // says otherwise. Nothing here reads the filesystem, the network, or
     // any environment variable, so no test in this module can reach the
     // real ~/.codex.
@@ -155,21 +155,21 @@ mod tests {
     /// of fields this layer never looks at); shape and key order preserved.
     const CREATED: &str = r#"{"type":"response.created","response":{"id":"resp_REDACTED","object":"response","status":"in_progress","model":"gpt-5.4-mini-2026-03-17","store":false},"sequence_number":0}"#;
     const IN_PROGRESS: &str = r#"{"type":"response.in_progress","response":{"id":"resp_REDACTED","object":"response","status":"in_progress"},"sequence_number":1}"#;
-    /// Verbatim from the capture.
+    /// From the adapted fixture described above.
     const ITEM_ADDED: &str = r#"{"type":"response.output_item.added","item":{"id":"msg_REDACTED","type":"message","status":"in_progress","content":[],"phase":"final_answer","role":"assistant"},"output_index":0,"sequence_number":2}"#;
-    /// Verbatim from the capture.
+    /// From the adapted fixture described above.
     const PART_ADDED: &str = r#"{"type":"response.content_part.added","content_index":0,"item_id":"msg_REDACTED","output_index":0,"part":{"type":"output_text","annotations":[],"logprobs":[],"text":""},"sequence_number":3}"#;
-    /// Verbatim from the capture.
+    /// Adapted fixture: text is a synthetic replacement for CSUB-VERIFY-OK.
     const TEXT_DONE: &str = r#"{"type":"response.output_text.done","content_index":0,"item_id":"msg_REDACTED","logprobs":[],"output_index":0,"sequence_number":10,"text":"ASKCODEX-VERIFY-OK"}"#;
-    /// Verbatim from the capture.
+    /// Adapted fixture: text is a synthetic replacement for CSUB-VERIFY-OK.
     const PART_DONE: &str = r#"{"type":"response.content_part.done","content_index":0,"item_id":"msg_REDACTED","output_index":0,"part":{"type":"output_text","annotations":[],"logprobs":[],"text":"ASKCODEX-VERIFY-OK"},"sequence_number":11}"#;
     /// SYNTHESIZED: the live capture stops at the bare
     /// `event: response.completed` line, so its `data:` line is
     /// reconstructed from the shape documented in PROTOCOL.md section 4.
     const COMPLETED: &str = r#"{"type":"response.completed","response":{"id":"resp_REDACTED","object":"response","status":"completed"},"sequence_number":13}"#;
 
-    /// The six deltas of the live verify run, verbatim (they spell
-    /// `ASKCODEX-VERIFY-OK`).
+    /// Six deltas adapted from the live run: CS/UB became ASK/CODEX.
+    /// They spell the synthetic fixture answer `ASKCODEX-VERIFY-OK`.
     const DELTAS: [(&str, &str); 6] = [
         (
             "ASK",

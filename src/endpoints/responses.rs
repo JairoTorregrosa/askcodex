@@ -226,7 +226,8 @@ mod tests {
     // Fixtures
     // -----------------------------------------------------------------
 
-    /// The REAL captured stream, verbatim. It ends at a bare
+    /// Adapted capture: identifiers are redacted and the sentinel text is
+    /// synthetic (see the fixture's provenance header). It ends at a bare
     /// `event: response.completed` line with no `data:` line because the
     /// capture was cut short — so the file as it stands is precisely the
     /// truncated-stream fixture, and the happy path is this plus the
@@ -237,7 +238,7 @@ mod tests {
     /// capture stops before the terminal event's `data:` line.
     const COMPLETED: &str = r#"{"type":"response.completed","response":{"id":"resp_REDACTED","object":"response","status":"completed"},"sequence_number":13}"#;
 
-    /// The answer the live run streamed, in six deltas.
+    /// Synthetic replacement for the live run's CSUB-VERIFY-OK, in six deltas.
     const LIVE_ANSWER: &str = "ASKCODEX-VERIFY-OK";
     const LIVE_DELTAS: [&str; 6] = ["ASK", "CODEX", "-", "VERIFY", "-", "OK"];
 
@@ -265,7 +266,7 @@ mod tests {
         frame("response.completed", COMPLETED)
     }
 
-    /// The live capture completed: the raw trace (which ends with the
+    /// The adapted fixture completed: the trace (which ends with the
     /// bare `event: response.completed` line, no trailing newline) plus the
     /// `data:` line it was missing.
     fn happy_stream() -> String {
@@ -670,7 +671,7 @@ mod tests {
 
     #[test]
     fn a_stream_that_ends_without_completed_is_an_error_not_a_short_answer() {
-        // The raw capture: every delta of the live answer, then the wire
+        // The adapted capture: every delta of the fixture answer, then the wire
         // stops before the terminal event's payload.
         let (result, deltas) = run_ask(LIVE_TRACE, &prompt());
 

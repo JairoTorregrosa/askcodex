@@ -263,7 +263,7 @@ envelope when the image path is next re-probed]`.
 
 ### 3.7 `POST /codex/responses` — streaming text completion (SSE)
 `[verified-live 2026-08-07]` (one real `askcodex ask`, plus the same call through `askcodex raw --stream`;
-the captured stream is [`samples/responses-sse.txt`](samples/responses-sse.txt)). Request:
+an adapted fixture is [`samples/responses-sse.txt`](samples/responses-sse.txt); see §4 for provenance). Request:
 ```json
 { "model": "<slug>",
   "input": [ { "type": "message", "role": "user",
@@ -310,8 +310,11 @@ offline mocks, not by rotating the user's real credentials.
 
 ## 4. SSE framing contract (for the parser in `src/sse.rs`)
 
-`[verified-live 2026-08-07]` — captured trace in
-[`samples/responses-sse.txt`](samples/responses-sse.txt) (a real stream with the ids redacted). That
+`[verified-live 2026-08-07]` — framing was observed in a real stream. The fixture in
+[`samples/responses-sse.txt`](samples/responses-sse.txt) is adapted from that capture:
+identifiers are redacted, and the original `CS`/`UB` deltas and `CSUB-VERIFY-OK`
+text fields were changed to `ASK`/`CODEX` and `ASKCODEX-VERIFY-OK`. These text
+values are synthetic; the other event metadata remains from the capture. That
 file is also the fixture `src/endpoints/responses.rs` and `src/run.rs` parse in their tests, so this
 contract and the parser cannot drift apart silently. The capture stops on the terminal
 `event: response.completed` line, before that frame's `data:` line, which is why it doubles as the
@@ -364,7 +367,8 @@ data: {"type":"response.output_text.delta","content_index":0,"delta":"ASK","item
 event: response.completed
 data: {"type":"response.completed","response":{ … }, "sequence_number":…}
 ```
-(Deltas in the verify run spelled `ASK`,`CODEX`,`-`,`VERIFY`,`-`,`OK` = `ASKCODEX-VERIFY-OK`.)
+(The adapted fixture spells `ASK`,`CODEX`,`-`,`VERIFY`,`-`,`OK` = `ASKCODEX-VERIFY-OK`;
+the original verify run spelled `CS`,`UB`,`-`,`VERIFY`,`-`,`OK` = `CSUB-VERIFY-OK`.)
 
 ---
 

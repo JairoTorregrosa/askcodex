@@ -4,7 +4,6 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
-use serde::Deserialize;
 use serde_json::Value;
 
 use crate::{config, error::Error, http::Client};
@@ -29,9 +28,17 @@ impl Upload {
     /// Resolve and validate the file before any authentication refresh or upload.
     pub fn read(path: &Path) -> Result<Self, Error> {
         let mut audio = Vec::new();
-        File::open(path)?
+        File::open(path)
+            .map_err(|source| Error::AudioFileUnreadable {
+                path: path.into(),
+                source,
+            })?
             .take(MAX_AUDIO_BYTES + 1)
-            .read_to_end(&mut audio)?;
+            .read_to_end(&mut audio)
+            .map_err(|source| Error::AudioFileUnreadable {
+                path: path.into(),
+                source,
+            })?;
         Self::from_wav(&audio)
     }
 
@@ -76,19 +83,39 @@ impl Upload {
     }
 }
 
-#[derive(Deserialize)]
-struct Transcription {
-    text: Option<String>,
+fn json_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
 }
 
 fn decode(raw: Value) -> Result<(String, Value), Error> {
-    let response: Transcription =
-        serde_json::from_value(raw.clone()).map_err(|_| Error::UnexpectedResponse {
-            context: "transcription response must be an object with a string text field".into(),
-        })?;
-    let text = response.text.ok_or_else(|| Error::UnexpectedResponse {
-        context: "transcription response is missing text".into(),
+    let object = raw.as_object().ok_or_else(|| Error::UnexpectedResponse {
+        context: format!(
+            "transcription response must be an object; got {}",
+            json_kind(&raw)
+        ),
     })?;
+    let value = object
+        .get("text")
+        .ok_or_else(|| Error::UnexpectedResponse {
+            context: "transcription response is missing text".into(),
+        })?;
+    // Report the mismatched type without echoing response values into diagnostics.
+    let text = value
+        .as_str()
+        .ok_or_else(|| Error::UnexpectedResponse {
+            context: format!(
+                "transcription response text must be a string; got {}",
+                json_kind(value)
+            ),
+        })?
+        .to_owned();
     // An empty transcript is valid (e.g. silence). Preserve it and every unknown JSON field.
     Ok((text, raw))
 }
@@ -152,5 +179,26 @@ mod tests {
         }
         let raw = json!({"text": "", "future_field": {"value": 3}});
         assert_eq!(decode(raw.clone()).unwrap(), (String::new(), raw));
+    }
+
+    #[test]
+    fn response_diagnostics_identify_shape_without_echoing_values() {
+        for (raw, expected) in [
+            (json!("private response"), "must be an object; got string"),
+            (json!({}), "missing text"),
+            (json!({"text": null}), "text must be a string; got null"),
+            (
+                json!({"text": ["private response"]}),
+                "text must be a string; got array",
+            ),
+            (
+                json!({"text": {"private response": true}}),
+                "text must be a string; got object",
+            ),
+        ] {
+            let error = decode(raw).unwrap_err().to_string();
+            assert!(error.contains(expected), "{error}");
+            assert!(!error.contains("private response"));
+        }
     }
 }

@@ -2221,7 +2221,10 @@ mod tests {
         // One write (and one flush) per line, as it arrives.
         assert_eq!(out.writes.len(), out.flushes);
         assert!(out.writes.len() > 20, "writes: {}", out.writes.len());
-        assert_eq!(out.writes[0], "event: response.created\n");
+        assert_eq!(
+            out.writes[0],
+            ": Provenance: adapted from the redacted 2026-08-07 capture, not a verbatim transcript.\n"
+        );
     }
 
     #[test]

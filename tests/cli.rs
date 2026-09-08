@@ -974,6 +974,18 @@ fn transcribe_rejects_invalid_audio_before_refresh_or_upload() {
 }
 
 #[test]
+fn transcribe_missing_file_reports_path_before_refresh_or_upload() {
+    let home = TempHome::new("transcribe-missing");
+    home.write_valid_auth();
+    let before = home.read_auth_bytes();
+    let file = home.path().join("missing-recording.wav");
+    askcodex(&home, &["transcribe", file.to_str().unwrap()])
+        .assert_askcodex_error(&["failed to read audio file", file.to_str().unwrap()])
+        .assert_no_request_attempted();
+    assert_eq!(before, home.read_auth_bytes());
+}
+
+#[test]
 fn transcribe_requires_a_file_argument() {
     let home = TempHome::new("transcribe-argument");
     let output = Command::new(env!("CARGO_BIN_EXE_askcodex"))
