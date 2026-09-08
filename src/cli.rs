@@ -65,6 +65,11 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Cmd {
+    /// Transcribe a WAV audio file to text.
+    Transcribe {
+        /// WAV audio file. Convert other formats to WAV before uploading.
+        file: PathBuf,
+    },
     /// Show account identity and plan.
     Whoami,
 

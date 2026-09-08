@@ -297,7 +297,12 @@ mod tests {
     }
 
     fn prompt() -> ResponsesRequest {
-        ResponsesRequest::user_text(config::DEFAULT_ASK_MODEL, "say ASKCODEX-VERIFY-OK", None, None)
+        ResponsesRequest::user_text(
+            config::DEFAULT_ASK_MODEL,
+            "say ASKCODEX-VERIFY-OK",
+            None,
+            None,
+        )
     }
 
     /// Serve `stream` as `text/event-stream` and run `ask_at` against it.
@@ -437,7 +442,8 @@ mod tests {
         });
 
         let mut client = client();
-        let request = ResponsesRequest::user_text("gpt-5.4-mini", "say ASKCODEX-VERIFY-OK", None, None);
+        let request =
+            ResponsesRequest::user_text("gpt-5.4-mini", "say ASKCODEX-VERIFY-OK", None, None);
         let answer = ask_at(
             &mut client,
             &server.url("/codex/responses"),
@@ -709,7 +715,10 @@ mod tests {
             "detail was {detail:?}"
         );
         // The offending payload is quoted so the failure is diagnosable.
-        assert!(detail.contains(r#""delta":"CODEX"#), "detail was {detail:?}");
+        assert!(
+            detail.contains(r#""delta":"CODEX"#),
+            "detail was {detail:?}"
+        );
         // Consumption stopped there: the later delta never reached the
         // caller and no partial answer was returned.
         assert_eq!(deltas, vec!["ASK".to_string()]);

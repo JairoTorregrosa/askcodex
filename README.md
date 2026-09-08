@@ -4,12 +4,13 @@
 
 [![CI](https://github.com/JairoTorregrosa/askcodex/actions/workflows/ci.yml/badge.svg)](https://github.com/JairoTorregrosa/askcodex/actions/workflows/ci.yml)
 
-Ask OpenAI's models from your terminal. One-shot text and images, zero
+Ask OpenAI's models from your terminal. Text, images, and audio transcription, zero
 configuration.
 
 ```sh
 askcodex ask "explain this stack trace" --model gpt-5.5
 askcodex image create "a tiny origami crane" -o crane.png
+askcodex transcribe recording.wav
 askcodex usage
 ```
 
@@ -60,6 +61,27 @@ Each call returns exactly one opaque PNG at a size the backend picks.
 There are no size, quality, transparency, format, or batch flags because
 the backend ignores those parameters — askcodex only offers controls it can
 actually honor. `edit` takes up to 5 reference images, PNG only.
+
+## Transcribe audio
+
+```sh
+askcodex transcribe recording.wav
+askcodex transcribe recording.wav --json --no-refresh > transcript.json
+```
+
+The default output is the transcript text. `--json` preserves the backend's
+JSON response, including additional fields. This command accepts WAV files
+up to a **25 MiB client-side limit**; other audio formats must be converted
+to WAV first. It does not select a model or promise timestamps or speaker labels.
+
+For example, with FFmpeg installed:
+
+```sh
+ffmpeg -i recording.mp3 -ar 16000 -ac 1 recording.wav
+```
+
+Audio uses the existing ChatGPT subscription credentials. Invalid local
+file signatures fail before an upload or credential refresh.
 
 ## Check your account
 

@@ -17,6 +17,9 @@
 //!    prints `askcodex: error: <msg>` on stderr and exits non-zero.
 //!
 //! Output contract per command (text mode / `--json` mode):
+//! - `transcribe`: validate and prepare WAV before refresh or upload;
+//!   print transcript plus newline / complete raw JSON response. Missing
+//!   text is an error; an explicitly empty string is valid.
 //! - `whoami`: aligned `key : value` lines for email, name, plan,
 //!   account_id, user_id (absent -> `-`) / the `models::WhoamiOutput`
 //!   struct, pretty JSON.
@@ -176,6 +179,9 @@ enum Resolved {
 /// A command that talks to the ChatGPT backend.
 #[derive(Debug)]
 enum Backend {
+    Transcribe {
+        upload: endpoints::transcription::Upload,
+    },
     Whoami,
     Usage,
     Models {
@@ -211,6 +217,9 @@ enum Backend {
 /// fails on the malformed body instead of after a token round-trip.
 fn resolve(cmd: Cmd, stdin: &mut dyn Read) -> Result<Resolved, Error> {
     let resolved = match cmd {
+        Cmd::Transcribe { file } => Resolved::Backend(Backend::Transcribe {
+            upload: endpoints::transcription::Upload::read(&file)?,
+        }),
         Cmd::Whoami => Resolved::Backend(Backend::Whoami),
         Cmd::Usage => Resolved::Backend(Backend::Usage),
         Cmd::Models { client_version } => Resolved::Backend(Backend::Models { client_version }),
@@ -358,6 +367,14 @@ fn run_backend(
                 emit_json(out, &who)
             } else {
                 emit_human(out, &render_whoami(&who))
+            }
+        }
+        Backend::Transcribe { upload } => {
+            let (text, raw) = upload.transcribe(client)?;
+            if json {
+                emit_json(out, &raw)
+            } else {
+                writeln!(out, "{text}").map_err(Error::from)
             }
         }
         Backend::Usage => {

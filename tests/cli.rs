@@ -961,6 +961,33 @@ fn auth_json_without_account_id_is_rejected() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn transcribe_rejects_invalid_audio_before_refresh_or_upload() {
+    let home = TempHome::new("transcribe-invalid");
+    home.write_valid_auth();
+    let before = home.read_auth_bytes();
+    let file = home.write_file("renamed.wav", b"ID3not a WAV");
+    // No --no-refresh: local rejection must precede even the pre-flight refresh.
+    askcodex(&home, &["transcribe", file.to_str().unwrap()])
+        .assert_askcodex_error(&["invalid audio", "RIFF/WAVE"])
+        .assert_no_request_attempted();
+    assert_eq!(before, home.read_auth_bytes());
+}
+
+#[test]
+fn transcribe_requires_a_file_argument() {
+    let home = TempHome::new("transcribe-argument");
+    let output = Command::new(env!("CARGO_BIN_EXE_askcodex"))
+        .env_clear()
+        .env("CODEX_HOME", home.path())
+        .env("HOME", home.path())
+        .arg("transcribe")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
 fn image_edit_rejects_a_missing_reference_before_any_request() {
     let home = TempHome::new("image-missing-ref");
     home.write_valid_auth();

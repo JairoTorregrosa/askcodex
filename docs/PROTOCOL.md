@@ -42,7 +42,7 @@ config file, or a flag — see §2.1 for why that is a rule rather than an omiss
 `[verified-source https://github.com/openai/codex/blob/2e3a1702c2e7adea5f2ae9ea2799c625024b4fda/codex-rs/model-provider-info/src/lib.rs#L37]`
 `pub const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";`
 
-Note: `/me` lives under `/backend-api` (**not** under `/codex`); all other endpoints below are under
+Note: `/me` and `/transcribe` live under `/backend-api` (**not** under `/codex`); the other endpoints below are under
 `/codex`.
 
 ---
@@ -275,6 +275,38 @@ Extra headers: `OpenAI-Beta: responses=experimental`, `Accept: text/event-stream
 **`store` MUST be `false`.** `[verified-live 2026-08-07]` — SSE contract below.
 
 ---
+
+### 3.8 `POST /transcribe` — audio → text
+
+`[verified-live 2026-09-08]` A synthetic WAV containing “This is a transcription
+test. The blue notebook contains seven pages.” returned HTTP 200 and:
+
+```json
+{"text":"This is a transcription test. The blue notebook contains seven pages."}
+```
+
+The route is `https://chatgpt.com/backend-api/transcribe`, outside `/codex`.
+The request is `multipart/form-data` with one part named `file`, filename
+`audio.wav`, content type `audio/wav`, and the unmodified WAV bytes. No model
+or language field was supplied. The Rust client succeeded with askcodex's
+existing subscription authorization, account, originator, and User-Agent
+headers. Credentials were read only; every live invocation disabled refresh.
+
+Discovery lead: [Codex Desktop dictation report](https://github.com/openai/codex/issues/20668).
+Initial Node/fetch diagnostic returned a non-JSON 403. curl multipart and the
+implemented Rust/ureq path succeeded. This does not establish the cause of
+the Node failure, a required Desktop User-Agent, or a need for an alternate
+transport. Local evidence: `/tmp/askcodex/transcribe-20260908/` (`probe-curl.json`,
+`rust-result.json`, synthetic `sample.wav`).
+
+`text` is parsed as an optional string and required for a usable result;
+missing/null/wrong-type values fail. A present empty string is preserved.
+`--json` returns the complete response object, retaining unknown fields.
+WAV is the only format exercised here. The 25 MiB cap is imposed locally
+to bound memory, not claimed as the server's maximum. Timestamps, language
+selection, speaker labels, other formats, duration limits, and model identity
+remain unverified. Multipart replay on a single 401 refresh is covered with
+offline mocks, not by rotating the user's real credentials.
 
 ## 4. SSE framing contract (for the parser in `src/sse.rs`)
 
