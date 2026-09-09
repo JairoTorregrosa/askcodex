@@ -83,7 +83,7 @@ Scope: implement and merge this change
 ```
 
 Use the actual maintainer login and concrete delegated scope. Missing,
-duplicate or conflicting fields and template placeholders fail the gate.
+duplicate or conflicting fields, repeated authorization sections and template placeholders fail the gate.
 These are self-declared assertions: the gate checks field structure and login
 syntax, not the account's existence, human identity, or the truth of the
 delegation. GitHub permissions and configured review rules still govern merge.

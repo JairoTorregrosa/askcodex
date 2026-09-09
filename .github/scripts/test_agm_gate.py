@@ -338,6 +338,13 @@ class AuthorizationContentTests(unittest.TestCase):
                           "Maintainer: @another-maintainer", "Scope: no merge"]:
             self.assertEqual(len(self.failures_for(valid + "\n" + duplicate)), 1)
 
+    def test_repeated_authorization_sections_are_rejected(self):
+        valid = "Authorization: granted\nMaintainer: @fixture-maintainer\nScope: implement and merge"
+        for between in ["", "## Notes\nUnrelated review context.\n"]:
+            for repeated in [valid, "Authorization: denied"]:
+                self.assertEqual(len(self.failures_for(
+                    valid + "\n" + between + "## Merge authorization\n" + repeated)), 1)
+
     def test_structured_fields_cannot_come_from_comments_fences_or_other_sections(self):
         valid = "Authorization: granted\nMaintainer: @fixture-maintainer\nScope: implement and merge"
         for content in ["<!--\n" + valid + "\n-->", "```\n" + valid + "\n```",

@@ -361,6 +361,7 @@ def authorization_has_content(body, heading):
     # comment is a template fragment, not authorization prose.
     body = re.sub(r"<!--.*?(?:-->|$)", "", body, flags=re.DOTALL)
     active = False
+    seen = False
     fence = None
     prose = []
     for line in body.splitlines():
@@ -376,12 +377,14 @@ def authorization_has_content(body, heading):
         if fence is not None:
             continue
         if stripped == heading:
-            if active:
-                break
+            if seen:
+                return False
+            seen = True
             active = True
             continue
         if active and re.match(r"^#{1,2}(?:\s|$)", stripped):
-            break
+            active = False
+            continue
         if not active or stripped.startswith("#"):
             continue
 
