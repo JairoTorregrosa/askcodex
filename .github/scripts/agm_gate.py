@@ -357,27 +357,50 @@ def scan_for_leaks(body):
 
 def authorization_has_content(body, heading):
     """Validate self-declared structured fields, not identity or permission."""
-    # Comments and fenced examples are not submitted evidence. An unclosed
-    # comment is a template fragment, not authorization prose.
-    body = re.sub(r"<!--.*?(?:-->|$)", "", body, flags=re.DOTALL)
+    # Comments are recognized only outside fenced examples. Literal comment
+    # syntax inside code must not erase or manufacture a closing fence.
+    comment = False
     active = False
     seen = False
     fence = None
     prose = []
     for line in body.splitlines():
+        marker = FENCE_RE.match(line)
+        if fence is not None:
+            if marker:
+                run = marker.group(1)
+                if run[0] == fence[0] and len(run) >= len(fence) and line.strip() == run:
+                    fence = None
+            continue
+        if not comment and line.expandtabs(4).startswith("    "):
+            continue
+        if not comment and marker:
+            fence = marker.group(1)
+            continue
+        visible = []
+        while line:
+            if comment:
+                end = line.find("-->")
+                if end < 0:
+                    break
+                comment = False
+                line = line[end + 3:]
+            else:
+                start = line.find("<!--")
+                if start < 0:
+                    visible.append(line)
+                    break
+                visible.append(line[:start])
+                line = line[start + 4:]
+                comment = True
+        line = "".join(visible)
         # Indented Markdown examples cannot supply fields or change fence state.
         if line.expandtabs(4).startswith("    "):
             continue
         stripped = line.strip()
-        marker = re.match(r"^(`{3,}|~{3,})", stripped)
+        marker = FENCE_RE.match(line)
         if marker:
-            run = marker.group(1)
-            if fence is None:
-                fence = run
-            elif run[0] == fence[0] and len(run) >= len(fence):
-                fence = None
-            continue
-        if fence is not None:
+            fence = marker.group(1)
             continue
         if stripped == heading:
             if seen:

@@ -357,6 +357,20 @@ class AuthorizationContentTests(unittest.TestCase):
             example = "\n".join(indent + line for line in valid.splitlines())
             self.assertEqual(len(self.failures_for(example)), 1)
             self.assertEqual(self.failures_for(indent + "```\n" + valid), [])
+            self.assertEqual(self.failures_for(indent + "<!-- literal example\n\n" + valid), [])
+
+    def test_only_bare_matching_rails_close_authorization_examples(self):
+        valid = "Authorization: granted\nMaintainer: @fixture-maintainer\nScope: implement and merge"
+        for rail in ["```", "~~~", "````"]:
+            for fake_close in [rail + "json", rail + " <!-- literal -->", rail[0] * 2]:
+                self.assertEqual(len(self.failures_for(
+                    rail + "text\n" + fake_close + "\n" + valid + "\n" + rail)), 1)
+            self.assertEqual(self.failures_for(rail + "text\nexample\n" + rail + "  \n" + valid), [])
+
+    def test_comment_syntax_inside_code_is_literal(self):
+        valid = "Authorization: granted\nMaintainer: @fixture-maintainer\nScope: implement and merge"
+        self.assertEqual(self.failures_for("```text\n<!-- example\n```\n" + valid), [])
+        self.assertEqual(self.failures_for("<!--\n```\n-->\n" + valid), [])
 
 class RedactionCatchTests(unittest.TestCase):
     """The scan must catch a real leak — in any zone, inside a fence or not."""
