@@ -342,8 +342,10 @@ class AuthorizationContentTests(unittest.TestCase):
         valid = "Authorization: granted\nMaintainer: @fixture-maintainer\nScope: implement and merge"
         for between in ["", "## Notes\nUnrelated review context.\n"]:
             for repeated in [valid, "Authorization: denied"]:
-                self.assertEqual(len(self.failures_for(
-                    valid + "\n" + between + "## Merge authorization\n" + repeated)), 1)
+                for title in ["## Merge authorization", "## Merge authorization ##",
+                              "## Merge authorization\t###", "##\tMerge authorization ###"]:
+                    self.assertEqual(len(self.failures_for(
+                        valid + "\n" + between + title + "\n" + repeated)), 1)
 
     def test_structured_fields_cannot_come_from_comments_fences_or_other_sections(self):
         valid = "Authorization: granted\nMaintainer: @fixture-maintainer\nScope: implement and merge"

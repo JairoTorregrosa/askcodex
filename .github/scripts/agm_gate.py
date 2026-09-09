@@ -402,7 +402,12 @@ def authorization_has_content(body, heading):
         if marker:
             fence = marker.group(1)
             continue
-        if stripped == heading:
+        atx = re.match(r"^(#{1,6})[ \t]+(.*)$", stripped)
+        normalized_heading = stripped
+        if atx:
+            title = re.sub(r"[ \t]+#+[ \t]*$", "", atx.group(2)).strip()
+            normalized_heading = atx.group(1) + " " + title
+        if normalized_heading == heading:
             if seen:
                 return False
             seen = True
