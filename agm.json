@@ -84,7 +84,7 @@
     },
     "authorization": {
       "heading": "## Merge authorization",
-      "means": "Name the maintainer who authorized delivery and the scope of any delegation. Distinguish authorization to implement and merge from human code review; never claim a review that did not occur. This prose is evidence, not an authentication mechanism."
+      "means": "Require exactly one Authorization: granted, Maintainer: @github-login, and Scope: concrete delegated scope within this section. Reject missing, duplicate, conflicting, or placeholder fields. These are self-declared assertions, not authentication or semantic verification. Distinguish delegated execution from human code review."
     }
   },
   "gates": {

@@ -356,7 +356,7 @@ def scan_for_leaks(body):
 
 
 def authorization_has_content(body, heading):
-    """Require bounded visible prose, not proof of identity or permission."""
+    """Validate self-declared structured fields, not identity or permission."""
     # Comments and fenced examples are not submitted evidence. An unclosed
     # comment is a template fragment, not authorization prose.
     body = re.sub(r"<!--.*?(?:-->|$)", "", body, flags=re.DOTALL)
@@ -384,16 +384,29 @@ def authorization_has_content(body, heading):
             break
         if not active or stripped.startswith("#"):
             continue
-        normalized = stripped.strip("-*_` []").casefold()
-        if re.match(r"^(?:todo|tbd|n/a|none|pending|placeholder)(?:\W|$)", normalized):
-            continue
-        # Angle placeholders and unchecked template boxes cannot supply words.
-        stripped = re.sub(r"<[^>]*>|\[[ xX]?\]", "", stripped)
+
         prose.append(stripped)
-    words = re.findall(r"[^\W_]+", " ".join(prose), flags=re.UNICODE)
-    words = [word for word in words if word.casefold() not in
-             {"todo", "tbd", "placeholder", "maintainer", "scope"}]
-    return len(words) >= 3
+    fields = {}
+    for line in prose:
+        match = re.fullmatch(r"(Authorization|Maintainer|Scope):[ \t]*(.*)", line)
+        if match:
+            key, value = match.groups()
+            if key in fields:
+                return False
+            fields[key] = value.strip()
+    if fields.get("Authorization") != "granted":
+        return False
+    login = fields.get("Maintainer", "")
+    if not re.fullmatch(r"@[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}", login):
+        return False
+    scope = fields.get("Scope", "")
+    if not any(character.isalpha() for character in scope) or re.search(r"[<>\[\]]", scope):
+        return False
+    return not re.match(
+        r"^(?:todo|tbd|n/a|none|pending|placeholder|describe|replace|scope)(?:\W|$)",
+        scope, flags=re.IGNORECASE,
+    )
+
 
 
 def evidence_failures(manifest, body, computed):
@@ -416,8 +429,8 @@ def evidence_failures(manifest, body, computed):
             failures.append(f"Missing section `{spec['heading']}`: {spec['means']}")
         elif key == "authorization" and not authorization_has_content(body, spec["heading"]):
             failures.append(
-                "Section `## Merge authorization` needs visible maintainer and delegation "
-                "scope evidence, not an empty heading or template placeholder."
+                "Section `## Merge authorization` requires Authorization: granted, Maintainer: @login, and "
+                "a concrete Scope: field; duplicate fields are rejected."
             )
 
     return failures

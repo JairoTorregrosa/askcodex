@@ -81,7 +81,9 @@ def body_for(zone, *, omit=(), declared=None, extra=""):
         if key in omit:
             continue
         spec = MANIFEST["sections"][key]
-        parts += [spec["heading"], "", f"Fabricated evidence for {key}.", ""]
+        evidence = ("Authorization: granted\nMaintainer: @fixture-maintainer\nScope: implement and merge this change"
+                    if key == "authorization" else f"Fabricated evidence for {key}.")
+        parts += [spec["heading"], "", evidence, ""]
     if extra:
         parts += [extra, ""]
     return "\n".join(parts)
@@ -301,15 +303,46 @@ class AuthorizationContentTests(unittest.TestCase):
                         extra="See ## Merge authorization for maintainer delivery scope.")
         self.assertEqual(len(agm_gate.evidence_failures(MANIFEST, body, "critical")), 1)
 
-    def test_visible_delegation_prose_passes_without_identity_claims(self):
+    def test_prose_alone_is_not_a_structured_grant(self):
         self.assertEqual(self.failures_for(
             "<!-- template guidance -->\nJairo authorized implementation and merge. "
-            "No human code review is claimed."), [])
+            "No human code review is claimed."), self.failures_for("denied"))
 
     def test_subsections_can_hold_real_authorization_prose(self):
         self.assertEqual(self.failures_for(
-            "### Delivery\nJairo delegated implementation and merge execution."), [])
+            "### Delivery\nAuthorization: granted\nMaintainer: @fixture-maintainer\nScope: implement and merge"), [])
 
+
+    def test_explicit_grant_and_scoped_maintainer_are_required(self):
+        valid = "Authorization: granted\nMaintainer: @fixture-maintainer\nScope: implement and merge"
+        self.assertEqual(self.failures_for(valid), [])
+        for content in ["No authorization was received.", "- [x] I am a human.",
+                        valid.replace("granted", "denied"), valid.replace("granted", "pending"),
+                        valid.replace("Maintainer: @fixture-maintainer\n", ""),
+                        valid.replace("Scope: implement and merge", ""),
+                        valid.replace("Authorization: granted\n", "")]:
+            with self.subTest(content=content):
+                self.assertEqual(len(self.failures_for(content)), 1)
+
+    def test_invalid_login_and_scope_placeholders_are_rejected(self):
+        for login in ["", "@<login>", "@-name", "@name-", "@two--hyphens", "@with_underscore", "@a" * 40]:
+            self.assertEqual(len(self.failures_for(
+                f"Authorization: granted\nMaintainer: {login}\nScope: implement and merge")), 1)
+        for scope in ["", "---", "123", "TODO", "TBD", "<delegated scope>", "[scope]", "describe the scope", "pending approval"]:
+            self.assertEqual(len(self.failures_for(
+                f"Authorization: granted\nMaintainer: @fixture-maintainer\nScope: {scope}")), 1)
+
+    def test_duplicate_and_conflicting_required_fields_are_rejected(self):
+        valid = "Authorization: granted\nMaintainer: @fixture-maintainer\nScope: implement and merge"
+        for duplicate in ["Authorization: granted", "Authorization: denied",
+                          "Maintainer: @another-maintainer", "Scope: no merge"]:
+            self.assertEqual(len(self.failures_for(valid + "\n" + duplicate)), 1)
+
+    def test_structured_fields_cannot_come_from_comments_fences_or_other_sections(self):
+        valid = "Authorization: granted\nMaintainer: @fixture-maintainer\nScope: implement and merge"
+        for content in ["<!--\n" + valid + "\n-->", "```\n" + valid + "\n```",
+                        "## Notes\n" + valid]:
+            self.assertEqual(len(self.failures_for(content)), 1)
 
 class RedactionCatchTests(unittest.TestCase):
     """The scan must catch a real leak — in any zone, inside a fence or not."""

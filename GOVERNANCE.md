@@ -73,6 +73,22 @@ human code review occurred. An independent agent review is valid second-review
 evidence, but it must identify itself as an agent review. Neither prose nor a
 checkbox authenticates a human or grants repository permissions.
 
+The section requires these exact, single-line fields outside comments and code
+fences:
+
+```text
+Authorization: granted
+Maintainer: @github-login
+Scope: implement and merge this change
+```
+
+Use the actual maintainer login and concrete delegated scope. Missing,
+duplicate or conflicting fields and template placeholders fail the gate.
+These are self-declared assertions: the gate checks field structure and login
+syntax, not the account's existence, human identity, or the truth of the
+delegation. GitHub permissions and configured review rules still govern merge.
+A denial or a checked legacy human checkbox is not an explicit grant.
+
 ## Gates
 
 The `AGM` workflow enforces the mechanical gates on every pull request:

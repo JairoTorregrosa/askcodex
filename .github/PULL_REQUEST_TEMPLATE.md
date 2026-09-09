@@ -44,3 +44,10 @@ verify. -->
 implement/merge. State whether independent human code review occurred; do not
 conflate delegated execution or an agent's second review with human review.
 GitHub permissions and configured review rules govern the actual merge. -->
+
+Authorization: <granted only when explicitly authorized>
+Maintainer: @<github-login>
+Scope: <concrete delegated scope>
+
+<!-- These self-declared fields do not authenticate identity or permission.
+Use exactly one of each field; duplicates/conflicts fail the gate. -->

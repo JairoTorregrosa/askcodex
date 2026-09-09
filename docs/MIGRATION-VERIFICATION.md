@@ -92,7 +92,7 @@ describe the executions below; they do not certify later edits or deployment.
 | --- | --- | --- |
 | Final offline `cargo test --locked` | 366 passed, 0 failed, 11 ignored: 314 library tests, 35 CLI tests, 8 fixture tests, 9 migration tests | `final-tests.log` |
 | Format, Clippy with warnings denied, private rustdoc with warnings denied, locked release build and generated-reference comparison | All passed on the 0.1.0 candidate | `final-fmt.log`, `final-clippy.log`, `final-rustdoc.log`, `final-build.log` |
-| Governance and installer | 76 governance tests and 7 Bats tests passed; shellcheck and shfmt passed | `final-governance.log`; local shell checks |
+| Governance and installer | 80 governance tests and 7 Bats tests passed; shellcheck and shfmt passed | `final-governance.log`; local shell checks |
 | Explicit final archived-baseline parity | 1 passed against the archived 0.0.1 binary | `final-baseline.log` |
 | Candidate installation | Installed 0.1.0 matches the release build; both skill directories match; generated reference matches; no-refresh auth check passed with unchanged credential bytes | `final-install.log` |
 | Extended fixture redaction and provenance suite | 8 passed, 0 failed; retains the original 6 tests and adds 2 provenance tests after the full-suite snapshot | `provenance.log` |
