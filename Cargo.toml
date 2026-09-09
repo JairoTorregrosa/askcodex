@@ -1,6 +1,6 @@
 [package]
 name = "askcodex"
-version = "0.0.1"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Your ChatGPT/Codex subscription as a CLI."
@@ -10,11 +10,11 @@ readme = "README.md"
 keywords = ["codex", "chatgpt", "cli", "subscription", "image"]
 categories = ["command-line-utilities"]
 
-# Dependency set and versions are probe-validated (Wave 1 dependency probe).
-# Do NOT add, remove, or upgrade dependencies without re-running a probe.
+# Keep dependency changes reviewed, locked, and validated at the declared MSRV.
 [dependencies]
 base64 = "0.23.1"
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+libc = "=0.2.189"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"

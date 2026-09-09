@@ -1,72 +1,10 @@
-//! Black-box safety tests for `askcodex::auth` — the module that rewrites the
-//! user's real credential file.
-//!
-//! These tests are deliberately OUTSIDE the crate: they see only the public
-//! API (`load_auth`, `jwt_exp`, `needs_refresh`, `refresh_with_endpoint`,
-//! `persist_atomic`, `models::AuthFile`, `config`), exactly like a
-//! downstream user. The unit tests inside `src/auth.rs` drive private
-//! helpers with injected paths and URLs; nothing here can do that, so every
-//! property below is proven through the same surface a third party has.
-//! Where a property is NOT observable from out here, the test says so
-//! instead of pretending to check it.
-//!
-//! # Isolation: how this file is safe to run
-//!
-//! - `CODEX_HOME` is pointed at a FRESH, empty temp directory for every
-//!   single test (even the pure ones), so the real `~/.codex` is
-//!   unreachable. Each `CodexHome` asserts `config::auth_path()` actually
-//!   resolves inside that directory — the isolation is proven, not assumed.
-//! - The production endpoint `config::TOKEN_URL` is never contacted:
-//!   `auth::refresh` (which pins it) is never called. Only
-//!   `refresh_with_endpoint` is, always against a localhost httpmock
-//!   server.
-//! - Every token in this file is invented (hand-built unsigned JWTs and
-//!   obvious placeholder strings). `account_id` is `acct_REDACTED`. No real
-//!   credential value exists here and none can be printed by these tests.
-//!
-//! # Thread-safety of the `CODEX_HOME` mutation (the chosen approach)
-//!
-//! `std::env::set_var` is `unsafe` in edition 2024 and process-global: on
-//! POSIX `setenv` may reallocate the whole `environ` array, so a write is
-//! undefined behavior if ANY other thread touches the environment at the
-//! same moment — not merely a thread reading `CODEX_HOME`.
-//!
-//! The approach chosen here is a **static `Mutex` held for the entire body
-//! of every test**, not merely around the `set_var` call: a test acquires
-//! `ENV_LOCK` first, mutates the variable second, and releases the lock
-//! only once the test — including its `Drop`-based env restoration and its
-//! `CODEX_HOME`-dependent cleanup — has finished. libtest still runs the
-//! tests on several threads, but every line of test code in this binary
-//! that reads or writes the environment runs under that lock, so no two of
-//! them can overlap. (`--test-threads=1` is a valid way to run this file
-//! but deliberately not a requirement: it cannot be imposed from inside a
-//! test file, so relying on it would be exactly the kind of unstated
-//! assumption this project refuses to make.)
-//!
-//! What that leaves — stated plainly instead of papered over — is threads
-//! this file does not own:
-//!
-//! 1. httpmock's background server threads. Their one-time startup, the
-//!    moment a server library would plausibly read the environment, is
-//!    forced to happen under the lock and BEFORE this binary's first
-//!    `set_var` (see `warm_up_mock_server`).
-//! 2. libtest's own harness threads, which read the environment outside
-//!    this file's control: `RUST_MIN_STACK` when spawning a test thread
-//!    and `RUST_BACKTRACE` when formatting a panic. std reads both through
-//!    one-shot caches, so in practice they are populated at the first test
-//!    spawn (before any test body, hence before any `set_var`) and only on
-//!    a run that is already failing, respectively.
-//!
-//! Poisoning is absorbed (`into_inner`) on purpose: one failing test must
-//! not cascade into unrelated ones, and the invariant the lock protects is
-//! re-established from scratch by the next test anyway.
+//! Credential safety regression tests with explicit per-test store paths.
+//! All credentials are invented; no process environment changes or live endpoints.
 
-use std::ffi::OsString;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard, Once};
 use std::time::Duration;
 
 use base64::Engine as _;
@@ -74,11 +12,15 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use httpmock::prelude::*;
 use serde_json::{Value, json};
 
-use askcodex::Error;
-use askcodex::Secret;
-use askcodex::auth::{jwt_exp, load_auth, needs_refresh, persist_atomic, refresh_with_endpoint};
-use askcodex::config;
-use askcodex::models::{self, AuthFile};
+use super::{
+    jwt::{jwt_exp, needs_refresh},
+    session::refresh_inner,
+    store::{load_auth_from, persist_atomic_to},
+};
+use crate::Error;
+use crate::Secret;
+use crate::config;
+use crate::models::{self, AuthFile};
 
 // ---------------------------------------------------------------------------
 // Invented credentials. Nothing in this file is real.
@@ -99,68 +41,20 @@ const SECS_PER_DAY: i64 = 86_400;
 // Environment isolation
 // ---------------------------------------------------------------------------
 
-/// Serializes every test in this binary (see the module header). Held for
-/// the whole test body, never just around the `set_var`.
-static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-/// Start (and immediately release) a mock server once, before this binary
-/// has ever written to the environment, so that httpmock's background
-/// threads do all of their own startup work — including any environment
-/// reads — while no write can be in flight.
-fn warm_up_mock_server() {
-    static WARM: Once = Once::new();
-    WARM.call_once(|| {
-        drop(MockServer::start());
-    });
-}
-
-/// A fresh, empty `CODEX_HOME` for one test, plus the lock that makes the
-/// process-global mutation sound.
+/// A fresh credential store for one test; no global environment mutation.
 struct CodexHome {
     path: PathBuf,
-    /// Dropped last (declared last): the directory is cleaned up and any
-    /// `EnvRestore` has run before another test may touch the environment.
-    _guard: MutexGuard<'static, ()>,
 }
-
 impl CodexHome {
-    fn fresh(tag: &str) -> CodexHome {
-        // 1. Take the lock BEFORE anything reads or writes the environment.
-        let guard = ENV_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        // 2. Let httpmock finish its one-time startup while no write can race it.
-        warm_up_mock_server();
-
+    fn fresh(tag: &str) -> Self {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
             "askcodex-auth-safety-{}-{tag}-{unique}",
             std::process::id()
         ));
-        // `create_dir` (not `create_dir_all`) so a leftover directory from a
-        // crashed run is a loud failure instead of a silently reused,
-        // non-fresh CODEX_HOME.
-        fs::create_dir(&path).expect("create a fresh, previously nonexistent CODEX_HOME");
-
-        // SAFETY: `ENV_LOCK` is held by this thread and is the only way any
-        // test in this binary reaches the environment, so no other thread
-        // can be reading or writing `CODEX_HOME` concurrently. See the
-        // module header for the full argument.
-        unsafe { std::env::set_var("CODEX_HOME", &path) };
-
-        let home = CodexHome {
-            path,
-            _guard: guard,
-        };
-        // Prove the isolation rather than assuming it: the library must
-        // resolve its credential path inside this temp directory.
-        assert_eq!(
-            config::auth_path().expect("auth_path resolves from CODEX_HOME"),
-            home.auth(),
-            "CODEX_HOME isolation failed — the library is not looking inside the temp dir"
-        );
-        home
+        fs::create_dir(&path).expect("fresh fixture directory");
+        Self { path }
     }
 
     fn path(&self) -> &Path {
@@ -197,6 +91,8 @@ impl CodexHome {
                     .into_owned()
             })
             .collect();
+        // The persistent lock inode is checked by the dedicated lock tests.
+        names.retain(|name| name != "auth.json.lock");
         names.sort();
         names
     }
@@ -224,7 +120,8 @@ impl CodexHome {
             0o600,
             "auth.json permissions were loosened by a failing operation"
         );
-        load_auth().expect("auth.json must still parse and validate after a failure");
+        load_auth_from(&self.auth())
+            .expect("auth.json must still parse and validate after a failure");
         self.assert_no_temp_files();
     }
 }
@@ -237,34 +134,6 @@ impl Drop for CodexHome {
         // at this (now removed) directory on purpose — unsetting it would
         // make the next resolution fall back to the user's real ~/.codex.
         let _ = fs::remove_dir_all(&self.path);
-    }
-}
-
-/// Removes an environment variable and puts it back on drop, even if the
-/// test panics. Only ever constructed while `ENV_LOCK` is held.
-struct EnvRestore {
-    key: &'static str,
-    previous: Option<OsString>,
-}
-
-impl EnvRestore {
-    fn remove(key: &'static str) -> EnvRestore {
-        let previous = std::env::var_os(key);
-        // SAFETY: `ENV_LOCK` is held (the caller owns a `CodexHome`), so no
-        // other test thread can read or write the environment concurrently.
-        unsafe { std::env::remove_var(key) };
-        EnvRestore { key, previous }
-    }
-}
-
-impl Drop for EnvRestore {
-    fn drop(&mut self) {
-        // SAFETY: as in `remove` — still under `ENV_LOCK`, which the
-        // `CodexHome` guard releases only after this runs.
-        match self.previous.take() {
-            Some(value) => unsafe { std::env::set_var(self.key, value) },
-            None => unsafe { std::env::remove_var(self.key) },
-        }
     }
 }
 
@@ -344,7 +213,7 @@ fn auth_with_access(access: &str, last_refresh: Option<&str>) -> AuthFile {
 /// comparison would silently pass while the credentials changed. Serde is
 /// transparent for `Secret`, so this snapshot really does compare values.
 fn snapshot(auth: &AuthFile) -> Value {
-    serde_json::to_value(auth).expect("auth document serializes")
+    super::test_document(auth)
 }
 
 fn read_json(path: &Path) -> Value {
@@ -392,7 +261,10 @@ fn codex_home_isolation_is_provable_from_outside() {
     let home = CodexHome::fresh("isolation");
 
     // The library resolves its path from CODEX_HOME, verbatim...
-    assert_eq!(config::auth_path().unwrap(), home.auth());
+    assert_eq!(
+        super::CredentialStore::from_path(home.auth()).path(),
+        home.auth()
+    );
     // ...and that path is nowhere near the user's real credential file.
     if let Some(real_home) = std::env::var_os("HOME") {
         let real_auth = PathBuf::from(real_home).join(".codex");
@@ -406,7 +278,7 @@ fn codex_home_isolation_is_provable_from_outside() {
     // file some earlier test left behind.
     assert!(home.entries().is_empty());
     assert!(matches!(
-        load_auth().unwrap_err(),
+        load_auth_from(&home.auth()).unwrap_err(),
         Error::AuthFileMissing { .. }
     ));
 }
@@ -421,8 +293,8 @@ fn unknown_keys_including_nulls_survive_a_load_persist_cycle() {
     let original = auth_document(FRESH_EXP);
     home.write_auth(&original);
 
-    let auth = load_auth().expect("fixture loads");
-    persist_atomic(&auth).expect("persist succeeds");
+    let auth = load_auth_from(&home.auth()).expect("fixture loads");
+    persist_atomic_to(&auth, &home.auth()).expect("persist succeeds");
 
     let before: Value = serde_json::from_str(&original).unwrap();
     let after = read_json(&home.auth());
@@ -486,8 +358,8 @@ fn persist_never_invents_the_optional_keys_a_document_omits() {
     );
     home.write_auth(&minimal);
 
-    let auth = load_auth().expect("minimal document loads");
-    persist_atomic(&auth).expect("persist succeeds");
+    let auth = load_auth_from(&home.auth()).expect("minimal document loads");
+    persist_atomic_to(&auth, &home.auth()).expect("persist succeeds");
 
     let written = read_json(&home.auth());
     assert_eq!(keys_of(&written), vec!["tokens".to_string()]);
@@ -502,10 +374,12 @@ fn persist_is_byte_stable_and_idempotent() {
     let home = CodexHome::fresh("idempotent");
     home.write_auth(&auth_document(FRESH_EXP));
 
-    persist_atomic(&load_auth().expect("load 1")).expect("persist 1");
+    persist_atomic_to(&load_auth_from(&home.auth()).expect("load 1"), &home.auth())
+        .expect("persist 1");
     let first = fs::read(home.auth()).expect("read 1");
 
-    persist_atomic(&load_auth().expect("load 2")).expect("persist 2");
+    persist_atomic_to(&load_auth_from(&home.auth()).expect("load 2"), &home.auth())
+        .expect("persist 2");
     let second = fs::read(home.auth()).expect("read 2");
 
     assert_eq!(first, second, "persist is not byte-stable across cycles");
@@ -527,8 +401,8 @@ fn persist_writes_0600_and_a_0600_backup_of_the_previous_document() {
     // Loosen the original deliberately: the rewrite must not inherit it.
     fs::set_permissions(home.auth(), fs::Permissions::from_mode(0o644)).unwrap();
 
-    let auth = load_auth().expect("fixture loads");
-    persist_atomic(&auth).expect("persist succeeds");
+    let auth = load_auth_from(&home.auth()).expect("fixture loads");
+    persist_atomic_to(&auth, &home.auth()).expect("persist succeeds");
 
     assert_eq!(mode_of(&home.auth()), 0o600, "auth.json must be 0600");
     assert_eq!(
@@ -557,7 +431,7 @@ fn persist_into_an_empty_codex_home_creates_no_backup() {
         jwt_expiring_at(FRESH_EXP)
     ));
 
-    persist_atomic(&auth).expect("persist succeeds");
+    persist_atomic_to(&auth, &home.auth()).expect("persist succeeds");
 
     assert_eq!(home.entries(), vec!["auth.json".to_string()]);
     assert_eq!(mode_of(&home.auth()), 0o600);
@@ -572,7 +446,7 @@ fn persist_into_a_read_only_directory_leaves_the_original_complete() {
     let home = CodexHome::fresh("readonly-dir");
     let original = auth_document(FRESH_EXP);
     home.write_auth(&original);
-    let auth = load_auth().expect("fixture loads");
+    let auth = load_auth_from(&home.auth()).expect("fixture loads");
 
     // Make the rename target's directory unwritable: neither the temp file
     // nor the backup nor the rename can happen.
@@ -584,7 +458,7 @@ fn persist_into_a_read_only_directory_leaves_the_original_complete() {
     let result = if probe.is_ok() {
         None
     } else {
-        Some(persist_atomic(&auth))
+        Some(persist_atomic_to(&auth, &home.auth()))
     };
     // Restore before any assertion can panic, so cleanup still works.
     fs::set_permissions(home.path(), fs::Permissions::from_mode(0o700)).unwrap();
@@ -617,10 +491,11 @@ fn persist_aborts_and_cleans_up_when_the_backup_cannot_be_written() {
     // A directory where the backup file goes makes the copy fail.
     fs::create_dir(home.backup()).unwrap();
 
-    let mut auth = load_auth().expect("fixture loads");
+    let mut auth = load_auth_from(&home.auth()).expect("fixture loads");
     auth.last_refresh = Some("2030-01-01T00:00:00.000000Z".to_string());
 
-    let err = persist_atomic(&auth).expect_err("a failed backup must abort the persist");
+    let err =
+        persist_atomic_to(&auth, &home.auth()).expect_err("a failed backup must abort the persist");
     assert!(matches!(err, Error::PersistFailed { .. }), "got {err}");
 
     home.assert_credentials_intact(original.as_bytes());
@@ -647,8 +522,9 @@ fn persist_refuses_to_reuse_a_foreign_temp_file() {
     let stale = home.join(&format!("auth.json.tmp.{}", std::process::id()));
     fs::write(&stale, "not ours").unwrap();
 
-    let auth = load_auth().expect("fixture loads");
-    let err = persist_atomic(&auth).expect_err("an existing temp file must abort the persist");
+    let auth = load_auth_from(&home.auth()).expect("fixture loads");
+    let err = persist_atomic_to(&auth, &home.auth())
+        .expect_err("an existing temp file must abort the persist");
     assert!(matches!(err, Error::PersistFailed { .. }), "got {err}");
 
     assert_eq!(
@@ -659,7 +535,7 @@ fn persist_refuses_to_reuse_a_foreign_temp_file() {
     let current = fs::read(home.auth()).expect("auth.json must still exist");
     assert_eq!(current, original.as_bytes());
     assert_eq!(mode_of(&home.auth()), 0o600);
-    load_auth().expect("auth.json must still parse and validate");
+    load_auth_from(&home.auth()).expect("auth.json must still parse and validate");
 }
 
 // ---------------------------------------------------------------------------
@@ -693,11 +569,16 @@ fn refresh_without_a_usable_refresh_token_never_contacts_the_server() {
         ),
     ] {
         home.write_auth(&document);
-        let mut auth = load_auth().expect("fixture loads");
+        let mut auth = load_auth_from(&home.auth()).expect("fixture loads");
         let before = snapshot(&auth);
 
-        let err = refresh_with_endpoint(&test_agent(), &mut auth, &server.url("/oauth/token"))
-            .expect_err("a refresh without a refresh token must fail loudly");
+        let err = refresh_inner(
+            &test_agent(),
+            &mut auth,
+            &server.url("/oauth/token"),
+            &home.auth(),
+        )
+        .expect_err("a refresh without a refresh token must fail loudly");
 
         assert!(matches!(err, Error::RefreshUnavailable), "got {err}");
         assert_eq!(
@@ -721,7 +602,7 @@ fn refresh_http_500_touches_neither_the_file_nor_the_struct() {
     let home = CodexHome::fresh("refresh-500");
     let original = auth_document(FRESH_EXP);
     home.write_auth(&original);
-    let mut auth = load_auth().expect("fixture loads");
+    let mut auth = load_auth_from(&home.auth()).expect("fixture loads");
     let before = snapshot(&auth);
 
     let server = MockServer::start();
@@ -730,8 +611,13 @@ fn refresh_http_500_touches_neither_the_file_nor_the_struct() {
         then.status(500).body("upstream is down");
     });
 
-    let err = refresh_with_endpoint(&test_agent(), &mut auth, &server.url("/oauth/token"))
-        .expect_err("a 500 must not be reported as a successful refresh");
+    let err = refresh_inner(
+        &test_agent(),
+        &mut auth,
+        &server.url("/oauth/token"),
+        &home.auth(),
+    )
+    .expect_err("a 500 must not be reported as a successful refresh");
 
     mock.assert_calls(1);
     assert!(
@@ -756,7 +642,7 @@ fn refresh_200_without_access_token_touches_neither_the_file_nor_the_struct() {
     let home = CodexHome::fresh("refresh-no-access");
     let original = auth_document(FRESH_EXP);
     home.write_auth(&original);
-    let mut auth = load_auth().expect("fixture loads");
+    let mut auth = load_auth_from(&home.auth()).expect("fixture loads");
     let before = snapshot(&auth);
 
     let server = MockServer::start();
@@ -768,8 +654,13 @@ fn refresh_200_without_access_token_touches_neither_the_file_nor_the_struct() {
         );
     });
 
-    let err = refresh_with_endpoint(&test_agent(), &mut auth, &server.url("/oauth/token"))
-        .expect_err("a 200 without access_token must not be treated as success");
+    let err = refresh_inner(
+        &test_agent(),
+        &mut auth,
+        &server.url("/oauth/token"),
+        &home.auth(),
+    )
+    .expect_err("a 200 without access_token must not be treated as success");
 
     mock.assert_calls(1);
     match &err {
@@ -799,7 +690,7 @@ fn refresh_that_omits_a_rotated_refresh_token_keeps_the_old_one() {
     // user unable to refresh ever again.
     let home = CodexHome::fresh("refresh-keeps-rt");
     home.write_auth(&auth_document(FRESH_EXP));
-    let mut auth = load_auth().expect("fixture loads");
+    let mut auth = load_auth_from(&home.auth()).expect("fixture loads");
     let before = snapshot(&auth);
     let new_access = jwt_expiring_at(FRESH_EXP + 3600);
 
@@ -813,8 +704,13 @@ fn refresh_that_omits_a_rotated_refresh_token_keeps_the_old_one() {
         ));
     });
 
-    refresh_with_endpoint(&test_agent(), &mut auth, &server.url("/oauth/token"))
-        .expect("a refresh without token rotation is still a success");
+    refresh_inner(
+        &test_agent(),
+        &mut auth,
+        &server.url("/oauth/token"),
+        &home.auth(),
+    )
+    .expect("a refresh without token rotation is still a success");
 
     mock.assert_calls(1);
     let after = snapshot(&auth);
@@ -846,7 +742,7 @@ fn successful_rotation_persists_every_field_plus_last_refresh_in_codex_format() 
     let home = CodexHome::fresh("refresh-ok");
     let original = auth_document(1_700_000_000);
     home.write_auth(&original);
-    let mut auth = load_auth().expect("fixture loads");
+    let mut auth = load_auth_from(&home.auth()).expect("fixture loads");
     let new_access = jwt_expiring_at(FRESH_EXP);
     let new_id = jwt_expiring_at(FRESH_EXP);
 
@@ -874,8 +770,13 @@ fn successful_rotation_persists_every_field_plus_last_refresh_in_codex_format() 
     // `format_last_refresh` truncates to microseconds; a second of slack on
     // each side keeps the window assertion honest without being flaky.
     let before = chrono::Utc::now() - chrono::Duration::seconds(1);
-    refresh_with_endpoint(&test_agent(), &mut auth, &server.url("/oauth/token"))
-        .expect("refresh succeeds");
+    refresh_inner(
+        &test_agent(),
+        &mut auth,
+        &server.url("/oauth/token"),
+        &home.auth(),
+    )
+    .expect("refresh succeeds");
     let after = chrono::Utc::now() + chrono::Duration::seconds(1);
     mock.assert_calls(1);
 
@@ -928,7 +829,7 @@ fn successful_rotation_persists_every_field_plus_last_refresh_in_codex_format() 
     );
 
     // And the result is a document askcodex can load again.
-    let reloaded = load_auth().expect("the rotated file reloads");
+    let reloaded = load_auth_from(&home.auth()).expect("the rotated file reloads");
     assert_eq!(snapshot(&reloaded), written);
     assert!(
         !needs_refresh(&reloaded, chrono::Utc::now()).expect("freshness check"),
@@ -945,7 +846,7 @@ fn a_rotation_that_cannot_be_persisted_is_reported_as_the_critical_state_it_is()
     let home = CodexHome::fresh("rotation-unpersistable");
     let original = auth_document(1_700_000_000);
     home.write_auth(&original);
-    let mut auth = load_auth().expect("fixture loads");
+    let mut auth = load_auth_from(&home.auth()).expect("fixture loads");
     // A leftover temp file from an earlier run of this process. The persist
     // therefore fails MID-write: after the current document was backed up,
     // and after the server already rotated the tokens.
@@ -961,8 +862,13 @@ fn a_rotation_that_cannot_be_persisted_is_reported_as_the_critical_state_it_is()
         ));
     });
 
-    let err = refresh_with_endpoint(&test_agent(), &mut auth, &server.url("/oauth/token"))
-        .expect_err("a rotation askcodex could not save must never be reported as success");
+    let err = refresh_inner(
+        &test_agent(),
+        &mut auth,
+        &server.url("/oauth/token"),
+        &home.auth(),
+    )
+    .expect_err("a rotation askcodex could not save must never be reported as success");
     mock.assert_calls(1);
 
     // Loud, and specifically about the one state where credentials can be
@@ -1016,7 +922,7 @@ fn a_rotation_that_cannot_be_persisted_is_reported_as_the_critical_state_it_is()
         original.as_bytes()
     );
     assert_eq!(mode_of(&home.auth()), 0o600);
-    load_auth().expect("auth.json must still parse and validate after a failure");
+    load_auth_from(&home.auth()).expect("auth.json must still parse and validate after a failure");
     assert_eq!(
         read_json(&home.auth())["tokens"]["refresh_token"],
         json!(OLD_REFRESH_TOKEN)
@@ -1047,7 +953,7 @@ fn refresh_never_contacts_the_endpoint_when_the_auth_path_cannot_be_resolved() {
     // server to rotate the token: a rotation it cannot save is a lockout.
     let home = CodexHome::fresh("unresolvable-home");
     home.write_auth(&auth_document(FRESH_EXP));
-    let mut auth = load_auth().expect("fixture loads");
+    let mut auth = load_auth_from(&home.auth()).expect("fixture loads");
     let before = snapshot(&auth);
 
     // Start the server BEFORE touching the environment (see module header).
@@ -1061,14 +967,17 @@ fn refresh_never_contacts_the_endpoint_when_the_auth_path_cannot_be_resolved() {
     });
 
     // Restored on drop, before the CodexHome guard releases ENV_LOCK.
-    let _no_codex_home = EnvRestore::remove("CODEX_HOME");
-    let _no_home = EnvRestore::remove("HOME");
+    let dangling = home.join("dangling-auth.json");
+    std::os::unix::fs::symlink(home.join("absent"), &dangling).unwrap();
+    let err = refresh_inner(
+        &test_agent(),
+        &mut auth,
+        &server.url("/oauth/token"),
+        &dangling,
+    )
+    .expect_err("an unresolvable auth path must abort the refresh");
 
-    assert!(matches!(config::auth_path(), Err(Error::NoHomeDir)));
-    let err = refresh_with_endpoint(&test_agent(), &mut auth, &server.url("/oauth/token"))
-        .expect_err("an unresolvable auth path must abort the refresh");
-
-    assert!(matches!(err, Error::NoHomeDir), "got {err}");
+    assert!(matches!(err, Error::AuthFileUnreadable { .. }), "got {err}");
     assert_eq!(
         mock.calls(),
         0,
@@ -1094,7 +1003,7 @@ fn auth_without_tokens_is_a_loud_named_error_about_file_based_storage() {
         r#"{"tokens":{"access_token":"","account_id":"acct_REDACTED"}}"#,
     ] {
         home.write_auth(document);
-        let err = load_auth()
+        let err = load_auth_from(&home.auth())
             .err()
             .unwrap_or_else(|| panic!("{document} must not load as a usable credential"));
 
@@ -1126,7 +1035,8 @@ fn tokens_without_an_account_id_are_rejected_with_their_own_error() {
         r#"{"tokens":{"access_token":"a.b.c","account_id":""}}"#,
     ] {
         home.write_auth(document);
-        let err = load_auth().expect_err("a document without account_id must not load");
+        let err =
+            load_auth_from(&home.auth()).expect_err("a document without account_id must not load");
         assert!(
             matches!(err, Error::AuthAccountIdMissing { .. }),
             "unexpected error for {document}: {err}"
@@ -1138,12 +1048,14 @@ fn tokens_without_an_account_id_are_rejected_with_their_own_error() {
 fn a_missing_or_corrupt_auth_file_is_loud_and_actionable() {
     let home = CodexHome::fresh("load-failures");
 
-    let err = load_auth().expect_err("a missing file must not produce empty credentials");
+    let err = load_auth_from(&home.auth())
+        .expect_err("a missing file must not produce empty credentials");
     assert!(matches!(err, Error::AuthFileMissing { .. }), "got {err}");
     assert!(err.to_string().contains("codex login"), "{err}");
 
     home.write_auth("{not json");
-    let err = load_auth().expect_err("a corrupt file must not produce empty credentials");
+    let err = load_auth_from(&home.auth())
+        .expect_err("a corrupt file must not produce empty credentials");
     assert!(matches!(err, Error::AuthFileInvalid { .. }), "got {err}");
     assert!(
         err.to_string().contains(&home.auth().display().to_string()),
@@ -1362,8 +1274,8 @@ fn a_second_process_adopts_the_rotated_credentials_instead_of_spending_its_own()
     home.write_auth(&auth_document(1_700_000_000));
 
     // Two handles on the same document: two processes, one credential file.
-    let mut first = load_auth().expect("load 1");
-    let mut second = load_auth().expect("load 2");
+    let mut first = load_auth_from(&home.auth()).expect("load 1");
+    let mut second = load_auth_from(&home.auth()).expect("load 2");
 
     let server = MockServer::start();
     // Matching on the body proves WHICH generation each request carried.
@@ -1379,14 +1291,24 @@ fn a_second_process_adopts_the_rotated_credentials_instead_of_spending_its_own()
         ));
     });
 
-    refresh_with_endpoint(&test_agent(), &mut first, &server.url("/oauth/token"))
-        .expect("the first refresh succeeds");
+    refresh_inner(
+        &test_agent(),
+        &mut first,
+        &server.url("/oauth/token"),
+        &home.auth(),
+    )
+    .expect("the first refresh succeeds");
     gen1.assert_calls(1);
     let rotated = read_json(&home.auth());
 
     // The second process now refreshes while still a generation behind.
-    refresh_with_endpoint(&test_agent(), &mut second, &server.url("/oauth/token"))
-        .expect("the second process must not fail over a race it can resolve");
+    refresh_inner(
+        &test_agent(),
+        &mut second,
+        &server.url("/oauth/token"),
+        &home.auth(),
+    )
+    .expect("the second process must not fail over a race it can resolve");
 
     assert_eq!(
         gen1.calls(),
@@ -1417,7 +1339,7 @@ fn a_lock_left_behind_by_a_crashed_run_never_makes_askcodex_unusable() {
     // must be reclaimed by age, not by a support ticket.
     let home = CodexHome::fresh("stale-lock");
     home.write_auth(&auth_document(1_700_000_000));
-    let mut auth = load_auth().expect("fixture loads");
+    let mut auth = load_auth_from(&home.auth()).expect("fixture loads");
 
     let lock = home.join("auth.json.lock");
     fs::write(&lock, "424242\n").expect("plant a lock file");
@@ -1437,8 +1359,13 @@ fn a_lock_left_behind_by_a_crashed_run_never_makes_askcodex_unusable() {
         ));
     });
 
-    refresh_with_endpoint(&test_agent(), &mut auth, &server.url("/oauth/token"))
-        .expect("a lock nobody owns must not block a refresh forever");
+    refresh_inner(
+        &test_agent(),
+        &mut auth,
+        &server.url("/oauth/token"),
+        &home.auth(),
+    )
+    .expect("a lock nobody owns must not block a refresh forever");
 
     mock.assert_calls(1);
     assert_eq!(
@@ -1468,9 +1395,9 @@ fn a_symlinked_auth_json_keeps_receiving_updates() {
     fs::set_permissions(&real, fs::Permissions::from_mode(0o600)).expect("0600");
     std::os::unix::fs::symlink(&real, home.auth()).expect("symlink auth.json");
 
-    let mut auth = load_auth().expect("the linked document loads");
+    let mut auth = load_auth_from(&home.auth()).expect("the linked document loads");
     auth.last_refresh = Some("2030-01-01T00:00:00.000000Z".to_string());
-    persist_atomic(&auth).expect("persist through the link");
+    persist_atomic_to(&auth, &home.auth()).expect("persist through the link");
 
     assert!(
         fs::symlink_metadata(home.auth())
@@ -1510,7 +1437,11 @@ fn the_backup_is_created_0600_never_widened_from_a_looser_file() {
     fs::set_permissions(home.backup(), fs::Permissions::from_mode(0o644)).unwrap();
     let before = inode_of(&home.backup());
 
-    persist_atomic(&load_auth().expect("fixture loads")).expect("persist succeeds");
+    persist_atomic_to(
+        &load_auth_from(&home.auth()).expect("fixture loads"),
+        &home.auth(),
+    )
+    .expect("persist succeeds");
 
     assert_ne!(
         inode_of(&home.backup()),
@@ -1530,14 +1461,14 @@ fn a_persist_failure_never_points_the_user_at_a_backup_it_did_not_write() {
     let home = CodexHome::fresh("no-backup-claim");
     let original = auth_document(FRESH_EXP);
     home.write_auth(&original);
-    let auth = load_auth().expect("fixture loads");
+    let auth = load_auth_from(&home.auth()).expect("fixture loads");
 
     fs::set_permissions(home.path(), fs::Permissions::from_mode(0o500)).unwrap();
     let probe = fs::File::create(home.join("enforcement-probe"));
     let result = if probe.is_ok() {
         None
     } else {
-        Some(persist_atomic(&auth))
+        Some(persist_atomic_to(&auth, &home.auth()))
     };
     fs::set_permissions(home.path(), fs::Permissions::from_mode(0o700)).unwrap();
     assert!(
@@ -1581,7 +1512,7 @@ fn a_refresh_error_body_is_scrubbed_of_credentials_before_it_is_quoted() {
     let home = CodexHome::fresh("scrubbed-refresh-error");
     let original = auth_document(FRESH_EXP);
     home.write_auth(&original);
-    let mut auth = load_auth().expect("fixture loads");
+    let mut auth = load_auth_from(&home.auth()).expect("fixture loads");
     let access = jwt_expiring_at(FRESH_EXP);
 
     let server = MockServer::start();
@@ -1592,8 +1523,13 @@ fn a_refresh_error_body_is_scrubbed_of_credentials_before_it_is_quoted() {
         ));
     });
 
-    let err = refresh_with_endpoint(&test_agent(), &mut auth, &server.url("/oauth/token"))
-        .expect_err("a 400 is a failed refresh");
+    let err = refresh_inner(
+        &test_agent(),
+        &mut auth,
+        &server.url("/oauth/token"),
+        &home.auth(),
+    )
+    .expect_err("a 400 is a failed refresh");
     mock.assert_calls(1);
 
     let rendered = err.to_string();

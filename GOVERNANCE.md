@@ -7,10 +7,10 @@ them for humans.
 ## Why
 
 Agents make contributions cheap to produce. They do not make
-contributions cheap to verify. One maintainer reviews every change; a
-review is only as fast as the information in front of it. These rules
-move the preparation of that information to the contributor and the
-contributor's agent, and keep the decision with the maintainer.
+contributions cheap to verify. These rules require evidence and independent
+second review for critical changes, while keeping delivery authorization with
+the maintainer. A maintainer may delegate implementation and merge execution;
+that delegation is not a claim that the maintainer reviewed the code.
 
 The principle is the same one askcodex itself follows: absence must be
 declared, not silent. askcodex never fakes a success — a missing credential,
@@ -31,7 +31,7 @@ its changed files.
 
 | Zone | Files | Why |
 |---|---|---|
-| critical | `install.sh`, `.github/*`, `AGENTS.md`, `CLAUDE.md`, `GOVERNANCE.md`, `agm.json`, `src/auth.rs`, `skill/*` | Writes to user machines, publishes binaries, instructs agents, or changes the rules of review itself. `auth.rs` rewrites the user's real credentials in `~/.codex/auth.json`: a bug there can lock the user out of codex. The `skill/` files are installed into `~/.claude/skills/` and instruct agents. `CLAUDE.md` is a symlink to `AGENTS.md`; replacing it with a file is an agent-instruction change. |
+| critical | `install.sh`, `.github/*`, `AGENTS.md`, `CLAUDE.md`, `GOVERNANCE.md`, `agm.json`, `src/auth.rs`, `src/auth/*`, `skill/*` | Writes to user machines, publishes binaries, instructs agents, or changes the rules of review itself. The auth module rewrites the user's real credentials in `~/.codex/auth.json`: a bug there can lock the user out of codex. The `skill/` files are installed into `~/.claude/skills/` and instruct agents. `CLAUDE.md` is a symlink to `AGENTS.md`; replacing it with a file is an agent-instruction change. |
 | high | `http.rs`, `main.rs`, `endpoints/*`, `config.rs`, `Cargo.toml`, `Cargo.lock` | Network calls to the live backend, header and error handling, `CODEX_HOME` resolution, the CLI entry point, dependency supply chain. |
 | medium | the rest of `src/` | Correctness of output. The product is a truthful CLI; a faked success or a wrong number is worse than a loud error. |
 | low | documentation, assets | No runtime effect. |
@@ -46,7 +46,7 @@ with the zone:
 | low | none — open the PR and CI does the rest |
 | medium | Summary · Checks · Behavior evidence |
 | high | + External assumptions · Risk |
-| critical | + Second review · Human confirmation |
+| critical | + Second review · Merge authorization |
 
 **External assumptions** is the section that tests cannot replace. This
 project reads data it does not control: the `auth.json` schema written by
@@ -67,28 +67,62 @@ PR body is a leaked credential, not proof.
 someone whose task is to refute the change, with findings and their
 resolution recorded.
 
-**Human confirmation** is a checkbox only the human contributor sets. An
-agent prepares the package; it never confirms it. This is the boundary
-between preparation and responsibility.
+**Merge authorization** records the maintainer who authorized delivery and the
+scope of any delegated implementation or merge execution. It must state whether
+human code review occurred. An independent agent review is valid second-review
+evidence, but it must identify itself as an agent review. Neither prose nor a
+checkbox authenticates a human or grants repository permissions.
+
+The section requires these exact, single-line fields outside comments and code
+fences:
+
+```text
+Authorization: granted
+Maintainer: @github-login
+Scope: implement and merge this change
+```
+
+Use the actual maintainer login and concrete delegated scope. Missing,
+duplicate or conflicting fields, repeated authorization sections and template placeholders fail the gate.
+These are self-declared assertions: the gate checks field structure and login
+syntax, not the account's existence, human identity, or the truth of the
+delegation. GitHub permissions and configured review rules still govern merge.
+A denial or a checked legacy human checkbox is not an explicit grant.
 
 ## Gates
 
 The `AGM` workflow enforces the mechanical gates on every pull request:
 it computes the zone from the changed files, compares it with the
-declared zone, and checks that the required sections and the
-confirmation box are present. Its job summary is the review packet: zone,
+declared zone, and checks that the required evidence sections are present.
+Its job summary is the review packet: zone,
 evidence status, missing items.
 
-The gate matches the section headings and the confirmation line from
+The gate matches the section headings from
 `agm.json` as exact substrings of the pull-request body, and
 `.github/PULL_REQUEST_TEMPLATE.md` supplies those exact strings. Editing a
 heading on one side alone breaks the gate for everyone; change both
 together, and remember that touching either file is itself a critical
 change.
 
-The final gate — approval — belongs to the maintainer. No tool sets it,
-no contributor statement substitutes for it, and a green `AGM` check does
-not imply it.
+GitHub authenticates the account performing a merge and enforces repository
+permissions and configured branch or ruleset requirements. A green `AGM` check
+proves only that the mechanical evidence checks passed; it does not certify
+authorization or human review. Delegated merge execution must use the
+maintainer's authorized scope and must not bypass configured review rules.
+
+When independent human approval is required, use a GitHub review from that
+reviewer's account. GitHub does not allow a pull-request author to approve
+their own pull request. A single-maintainer repository should therefore keep
+delivery authorization distinct from independent human review: either obtain
+a different eligible reviewer, use a separately attributed bot contributor
+when the maintainer will review, or rely on explicitly authorized delivery
+without claiming human review where repository rules permit it. Never create
+a second identity or synthetic approval merely to satisfy a review check.
+See [GitHub's review rules](https://docs.github.com/en/pull-requests/how-tos/review-pull-requests/approving-a-pull-request-with-required-reviews).
+
+The AGM workflow reads its rules and script from the pull request's base branch.
+A governance change cannot authorize itself: the pull request introducing
+these rules must still satisfy the previously merged gate.
 
 ## Proportionality
 

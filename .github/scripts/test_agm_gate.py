@@ -42,8 +42,6 @@ import agm_gate  # noqa: E402  (needs the sys.path line above)
 
 GATE = Path(agm_gate.__file__).resolve()
 MANIFEST = agm_gate.load_manifest()
-CHECKBOX = MANIFEST["sections"]["confirmation"]["checkbox"]
-UNCHECKED = CHECKBOX.replace("[x]", "[ ]", 1)
 
 # --- fabricated fixtures ---------------------------------------------------
 # Shapes only. Nothing here is, or resembles, a real credential.
@@ -73,22 +71,19 @@ TEMPLATE_PHRASES = [
 ]
 
 
-def body_for(zone, *, omit=(), declared=None, confirmed=True, extra=""):
+def body_for(zone, *, omit=(), declared=None, extra=""):
     """A pull-request body that satisfies `zone`, built from the manifest.
 
     `omit` drops sections by key; `declared` overrides the declared zone;
-    `confirmed` leaves the human box unchecked when False.
     """
     parts = [f"Risk zone: {zone if declared is None else declared}", ""]
     for key in MANIFEST["evidence"][zone]:
         if key in omit:
             continue
         spec = MANIFEST["sections"][key]
-        if key == "confirmation":
-            parts += ["## Human confirmation", ""]
-            parts += [CHECKBOX if confirmed else UNCHECKED, ""]
-        else:
-            parts += [spec["heading"], "", f"Fabricated evidence for {key}.", ""]
+        evidence = ("Authorization: granted\nMaintainer: @fixture-maintainer\nScope: implement and merge this change"
+                    if key == "authorization" else f"Fabricated evidence for {key}.")
+        parts += [spec["heading"], "", evidence, ""]
     if extra:
         parts += [extra, ""]
     return "\n".join(parts)
@@ -161,6 +156,10 @@ class ZoneComputationTests(unittest.TestCase):
         # low (`*`). Every file matches at least two, because `*` is the low
         # zone's pattern.
         self.assertEqual(self.zone("src/auth.rs"), "critical")
+        self.assertEqual(self.zone("src/auth/store.rs"), "critical")
+        self.assertEqual(self.zone("src/auth/session.rs"), "critical")
+        self.assertEqual(self.zone("src/auth/lock.rs"), "critical")
+        self.assertEqual(self.zone("src/http/target.rs"), "high")
         # src/main.rs matches high, medium and low.
         self.assertEqual(self.zone("src/main.rs"), "high")
 
@@ -206,10 +205,7 @@ class RequiredSectionTests(unittest.TestCase):
                 with self.subTest(zone=zone, section=key):
                     failures = self.failures(body_for(zone, omit=(key,)), zone)
                     self.assertEqual(len(failures), 1, failures)
-                    needle = (
-                        "confirmation" if key == "confirmation"
-                        else MANIFEST["sections"][key]["heading"]
-                    )
+                    needle = MANIFEST["sections"][key]["heading"]
                     self.assertIn(needle.lower(), failures[0].lower())
 
     def test_a_lower_zones_package_does_not_satisfy_a_higher_one(self):
@@ -233,36 +229,150 @@ class RequiredSectionTests(unittest.TestCase):
         self.assertEqual(self.failures(body_for("high", declared="HIGH"), "high"), [])
 
 
-class HumanConfirmationTests(unittest.TestCase):
-    """The one gate an agent must never be able to satisfy."""
+class MergeAuthorizationTests(unittest.TestCase):
+    """Evidence checks never impersonate human review or authenticate prose."""
 
-    def test_unchecked_box_fails_critical(self):
-        failures = agm_gate.evidence_failures(
-            MANIFEST, body_for("critical", confirmed=False), "critical"
-        )
-        self.assertEqual(len(failures), 1, failures)
-        self.assertIn("only a human may check it", failures[0])
-
-    def test_checked_box_passes_critical(self):
+    def test_critical_evidence_needs_no_human_identity_claim(self):
+        body = body_for("critical")
+        self.assertNotIn("I am a human", body)
+        self.assertNotIn("[x]", body)
         self.assertEqual(
-            agm_gate.evidence_failures(MANIFEST, body_for("critical"), "critical"), []
+            agm_gate.evidence_failures(MANIFEST, body, "critical"), []
         )
 
-    def test_the_box_is_matched_literally(self):
-        # A paraphrase is not the box. The gate matches agm.json's exact
-        # string, which .github/PULL_REQUEST_TEMPLATE.md supplies verbatim.
-        body = body_for("critical", confirmed=False).replace(
-            UNCHECKED, "- [x] I am a human and I take responsibility."
+    def test_human_checkbox_cannot_replace_authorization_evidence(self):
+        body = body_for(
+            "critical", omit=("authorization",),
+            extra="- [x] I am a human. I approve this change."
         )
         failures = agm_gate.evidence_failures(MANIFEST, body, "critical")
         self.assertEqual(len(failures), 1, failures)
-        self.assertIn("Human confirmation box", failures[0])
+        self.assertIn("## Merge authorization", failures[0])
 
-    def test_confirmation_is_only_required_where_agm_json_says(self):
-        self.assertNotIn("confirmation", MANIFEST["evidence"]["medium"])
-        self.assertNotIn("confirmation", MANIFEST["evidence"]["high"])
-        self.assertIn("confirmation", MANIFEST["evidence"]["critical"])
+    def test_critical_keeps_independent_review_and_authorization_evidence(self):
+        self.assertIn("second_review", MANIFEST["evidence"]["critical"])
+        self.assertIn("authorization", MANIFEST["evidence"]["critical"])
+        self.assertNotIn("confirmation", MANIFEST["sections"])
 
+    def test_template_and_manifest_use_the_same_evidence_headings(self):
+        template = (GATE.parents[2] / ".github/PULL_REQUEST_TEMPLATE.md").read_text()
+        for key in MANIFEST["evidence"]["critical"]:
+            self.assertIn(MANIFEST["sections"][key]["heading"], template)
+        self.assertNotIn("I am a human", template)
+
+    def test_summary_does_not_claim_review_or_authorization(self):
+        result = run_gate(body=body_for("critical"), changed_files="src/auth.rs")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("does not authenticate authorization or certify human review", result.stdout)
+
+
+class AuthorizationContentTests(unittest.TestCase):
+    def failures_for(self, content):
+        return agm_gate.evidence_failures(
+            MANIFEST, body_for("critical", omit=("authorization",),
+                               extra="## Merge authorization\n\n" + content), "critical")
+
+    def test_empty_whitespace_and_comment_templates_fail(self):
+        for content in ["", " \n\t", "<!-- Name maintainer and scope -->",
+                        "<!-- unfinished template"]:
+            with self.subTest(content=content):
+                self.assertEqual(len(self.failures_for(content)), 1)
+
+    def test_placeholder_only_content_fails(self):
+        for content in ["TODO", "TBD", "- [ ]", "<maintainer> <scope>",
+                        "TODO: name the maintainer and describe scope",
+                        "Maintainer: TODO\nScope: TBD", "### Maintainer and scope"]:
+            with self.subTest(content=content):
+                self.assertEqual(len(self.failures_for(content)), 1)
+
+    def test_prose_in_another_section_cannot_fill_empty_authorization(self):
+        for heading in ["## Notes", "# Another section"]:
+            self.assertEqual(len(self.failures_for(
+                heading + "\nJairo authorized implementation and merge.")), 1)
+
+    def test_authorization_in_comment_or_code_is_not_visible_evidence(self):
+        for content in [
+            "<!-- Jairo authorized implementation and merge. -->",
+            "```text\nJairo authorized implementation and merge.\n```",
+            "~~~text\nJairo authorized implementation and merge.\n~~~",
+        ]:
+            self.assertEqual(len(self.failures_for(content)), 1)
+
+    def test_heading_only_embedded_in_prose_is_not_an_authorization_section(self):
+        body = body_for("critical", omit=("authorization",),
+                        extra="See ## Merge authorization for maintainer delivery scope.")
+        self.assertEqual(len(agm_gate.evidence_failures(MANIFEST, body, "critical")), 1)
+
+    def test_prose_alone_is_not_a_structured_grant(self):
+        self.assertEqual(self.failures_for(
+            "<!-- template guidance -->\nJairo authorized implementation and merge. "
+            "No human code review is claimed."), self.failures_for("denied"))
+
+    def test_subsections_can_hold_real_authorization_prose(self):
+        self.assertEqual(self.failures_for(
+            "### Delivery\nAuthorization: granted\nMaintainer: @fixture-maintainer\nScope: implement and merge"), [])
+
+
+    def test_explicit_grant_and_scoped_maintainer_are_required(self):
+        valid = "Authorization: granted\nMaintainer: @fixture-maintainer\nScope: implement and merge"
+        self.assertEqual(self.failures_for(valid), [])
+        for content in ["No authorization was received.", "- [x] I am a human.",
+                        valid.replace("granted", "denied"), valid.replace("granted", "pending"),
+                        valid.replace("Maintainer: @fixture-maintainer\n", ""),
+                        valid.replace("Scope: implement and merge", ""),
+                        valid.replace("Authorization: granted\n", "")]:
+            with self.subTest(content=content):
+                self.assertEqual(len(self.failures_for(content)), 1)
+
+    def test_invalid_login_and_scope_placeholders_are_rejected(self):
+        for login in ["", "@<login>", "@-name", "@name-", "@two--hyphens", "@with_underscore", "@a" * 40]:
+            self.assertEqual(len(self.failures_for(
+                f"Authorization: granted\nMaintainer: {login}\nScope: implement and merge")), 1)
+        for scope in ["", "---", "123", "TODO", "TBD", "<delegated scope>", "[scope]", "describe the scope", "pending approval"]:
+            self.assertEqual(len(self.failures_for(
+                f"Authorization: granted\nMaintainer: @fixture-maintainer\nScope: {scope}")), 1)
+
+    def test_duplicate_and_conflicting_required_fields_are_rejected(self):
+        valid = "Authorization: granted\nMaintainer: @fixture-maintainer\nScope: implement and merge"
+        for duplicate in ["Authorization: granted", "Authorization: denied",
+                          "Maintainer: @another-maintainer", "Scope: no merge"]:
+            self.assertEqual(len(self.failures_for(valid + "\n" + duplicate)), 1)
+
+    def test_repeated_authorization_sections_are_rejected(self):
+        valid = "Authorization: granted\nMaintainer: @fixture-maintainer\nScope: implement and merge"
+        for between in ["", "## Notes\nUnrelated review context.\n"]:
+            for repeated in [valid, "Authorization: denied"]:
+                for title in ["## Merge authorization", "## Merge authorization ##",
+                              "## Merge authorization\t###", "##\tMerge authorization ###"]:
+                    self.assertEqual(len(self.failures_for(
+                        valid + "\n" + between + title + "\n" + repeated)), 1)
+
+    def test_structured_fields_cannot_come_from_comments_fences_or_other_sections(self):
+        valid = "Authorization: granted\nMaintainer: @fixture-maintainer\nScope: implement and merge"
+        for content in ["<!--\n" + valid + "\n-->", "```\n" + valid + "\n```",
+                        "## Notes\n" + valid]:
+            self.assertEqual(len(self.failures_for(content)), 1)
+
+    def test_indented_code_cannot_supply_fields_or_fence_markers(self):
+        valid = "Authorization: granted\nMaintainer: @fixture-maintainer\nScope: implement and merge"
+        for indent in ["    ", "\t", " \t", "  \t"]:
+            example = "\n".join(indent + line for line in valid.splitlines())
+            self.assertEqual(len(self.failures_for(example)), 1)
+            self.assertEqual(self.failures_for(indent + "```\n" + valid), [])
+            self.assertEqual(self.failures_for(indent + "<!-- literal example\n\n" + valid), [])
+
+    def test_only_bare_matching_rails_close_authorization_examples(self):
+        valid = "Authorization: granted\nMaintainer: @fixture-maintainer\nScope: implement and merge"
+        for rail in ["```", "~~~", "````"]:
+            for fake_close in [rail + "json", rail + " <!-- literal -->", rail[0] * 2]:
+                self.assertEqual(len(self.failures_for(
+                    rail + "text\n" + fake_close + "\n" + valid + "\n" + rail)), 1)
+            self.assertEqual(self.failures_for(rail + "text\nexample\n" + rail + "  \n" + valid), [])
+
+    def test_comment_syntax_inside_code_is_literal(self):
+        valid = "Authorization: granted\nMaintainer: @fixture-maintainer\nScope: implement and merge"
+        self.assertEqual(self.failures_for("```text\n<!-- example\n```\n" + valid), [])
+        self.assertEqual(self.failures_for("<!--\n```\n-->\n" + valid), [])
 
 class RedactionCatchTests(unittest.TestCase):
     """The scan must catch a real leak — in any zone, inside a fence or not."""
@@ -641,7 +751,7 @@ class ExitCodeTests(unittest.TestCase):
     def test_zero_when_every_gate_passes(self):
         result = run_gate(body=body_for("critical"), changed_files="install.sh\n")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("All mechanical gates pass", result.stdout)
+        self.assertIn("All mechanical evidence gates pass", result.stdout)
 
     def test_zone_low_needs_no_evidence_package(self):
         result = run_gate(body="", changed_files="README.md\n")

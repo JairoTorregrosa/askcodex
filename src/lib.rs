@@ -8,29 +8,29 @@
 //! written by `codex login`). No API key is used or accepted anywhere in
 //! this crate.
 //!
-//! Module map (see DESIGN.md for the rationale and the frozen-contract
-//! list):
-//! - [`cli`]     — clap command tree (FROZEN contract).
-//! - [`config`]  — constants + CODEX_HOME resolution (FROZEN, complete).
-//! - [`error`]   — the crate error enum (FROZEN, complete).
-//! - [`models`]  — wire/file serde types (FROZEN, complete).
-//! - [`redact`]  — the Secret newtype (FROZEN, complete).
-//! - [`auth`]    — load/refresh/persist credentials.
-//! - [`http`]    — authenticated client, origin gate, 401 policy.
-//! - [`sse`]     — SSE framing over BufRead.
-//! - [`endpoints`] — account / images / responses wrappers.
-//! - [`run`]     — dispatch + rendering.
+//! Module map (see DESIGN.md for architectural decisions):
+//! - [`cli`]     — clap command tree.
+//! - [`config`]  — constants + CODEX_HOME resolution.
+//! - [`error`]   — the crate error enum.
+//! - [`models`]  — wire/file serde types.
+//! - `redact`  — the Secret newtype.
+//! - `auth`    — load/refresh/persist credentials.
+//! - `http`    — authenticated client, origin gate, 401 policy.
+//! - `sse`     — SSE framing over BufRead.
+//! - `endpoints` — account / images / responses wrappers.
+//! - [`run()`]     — dispatch + rendering.
 
-pub mod auth;
+mod auth;
 pub mod cli;
 pub mod config;
-pub mod endpoints;
+mod endpoints;
 pub mod error;
-pub mod http;
+mod http;
+mod input;
 pub mod models;
-pub mod redact;
-pub mod run;
-pub mod sse;
+mod redact;
+mod run;
+mod sse;
 
 pub use cli::Cli;
 pub use error::Error;

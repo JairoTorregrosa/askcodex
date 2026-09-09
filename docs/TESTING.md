@@ -15,8 +15,8 @@ tiers with very different costs, and one rule that applies to all of them:
 | --- | --- | --- | --- | --- | --- | --- |
 | 1 — unit | Pure logic: JWT `exp` math, SSE framing, arg parsing, response decoding, every renderer | none | none | none | always on | `cargo test` |
 | 2 — offline integration | Wiring: HTTP headers, status handling, the 401→refresh→retry policy, atomic auth writes, SSE over a real socket | loopback only (`httpmock`) | fake, in a temp `CODEX_HOME` | none | always on | `cargo test` |
-| 3a — live, read-only | That the **real** backend still answers the shapes askcodex parses | `chatgpt.com` | **your real** `~/.codex/auth.json`, read-only | none | `ASKCODEX_LIVE=1` | `ASKCODEX_LIVE=1 cargo test --test live` |
-| 3b — live, quota | The image size/opacity lock and real SSE streaming | `chatgpt.com` | **your real** `~/.codex/auth.json`, read-only | 2 images + 1 message | `ASKCODEX_LIVE=1 ASKCODEX_LIVE_QUOTA=1` | `ASKCODEX_LIVE=1 ASKCODEX_LIVE_QUOTA=1 cargo test --test live` |
+| 3a — live, read-only | That the **real** backend still answers the shapes askcodex parses | `chatgpt.com` | **your real** `~/.codex/auth.json`, read-only | none | `ASKCODEX_LIVE=1` | `ASKCODEX_LIVE=1 cargo test --test live -- --ignored --skip live_quota` |
+| 3b — live, quota | The image size/opacity lock and real SSE streaming | `chatgpt.com` | **your real** `~/.codex/auth.json`, read-only | 2 images + 1 message | `ASKCODEX_LIVE=1 ASKCODEX_LIVE_QUOTA=1` | `ASKCODEX_LIVE=1 ASKCODEX_LIVE_QUOTA=1 cargo test --test live -- --ignored` |
 
 CI runs tiers 1 and 2 only. See [Why CI stops at tier 2](#why-ci-stops-at-tier-2).
 
@@ -25,7 +25,7 @@ CI runs tiers 1 and 2 only. See [Why CI stops at tier 2](#why-ci-stops-at-tier-2
 ## Tiers 1 and 2 — `cargo test`
 
 ```sh
-cargo test                      # everything offline (tier 3 skips, visibly)
+cargo test                      # everything offline (tier 3 is ignored)
 cargo test --lib                # in-crate tests only
 cargo test sse                  # filter by name
 cargo clippy --all-targets -- -D warnings
@@ -71,21 +71,25 @@ tests, `the_gate_would_actually_fail`, runs every pattern against a
 fabricated offender — a sanitization check that cannot go red is worse
 than none, because it gets read as proof.
 
-`cargo test` also compiles and runs `tests/live.rs`. Without the gate
-variables every test in it is a no-op that prints why:
+`cargo test` compiles `tests/live.rs` but reports its nine tests as **ignored**
+with explicit reasons. A passing offline run does not imply live verification.
+Even `--ignored` cannot authorize network access: the selected live tests fail
+before reading credentials unless their environment gates are explicitly set.
+For the read-only tier, exclude `live_quota` tests as shown below.
 
-```text
-running 9 tests
-askcodex live: live_usage_decodes_into_the_typed_model_and_its_windows_parse: skipped — set ASKCODEX_LIVE=1 to run (real backend, real credentials, no quota spent)
-askcodex live: live_quota_ask_streams_a_completed_answer: skipped — set ASKCODEX_LIVE=1 ASKCODEX_LIVE_QUOTA=1 to run (real backend; SPENDS your quota)
-...
-test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Installer behavior is tested separately with fake cargo and a fake binary in
+fresh temporary homes, without real credentials or builds:
+
+```sh
+bats tests/install.bats
+shellcheck install.sh tests/install.bats
+shfmt -d -i 4 install.sh tests/install.bats
 ```
 
-Those lines are written to the stdout **handle** rather than through
-`println!`, because libtest captures macro output and shows it only for
-failing tests — which would make a skipped tier invisible in exactly the
-case that matters.
+The installer defaults to installing only the binary. `--skills agents|claude|all`
+selects skill synchronization explicitly; `--check-auth` checks stored credentials
+without refreshing. Tests cover selection, invalid arguments, authentication
+isolation, backups, idempotence, locks, and existing directory permissions.
 
 ---
 
@@ -119,8 +123,7 @@ first.
 
 `ASKCODEX_LIVE_QUOTA=1` without `ASKCODEX_LIVE=1` is a hard error, not a silent
 skip: you asked for something that could not happen, so the suite says so.
-The accepted value for both variables is exactly `1`; unset or empty means
-skip; anything else (`true`, `yes`, `0`) panics rather than pretending you
+The accepted value for both variables is exactly `1`; unset or empty does not authorize a selected test; anything else (`true`, `yes`, `0`) panics rather than pretending you
 did not mean it.
 
 ### The rules the live suite obeys
@@ -153,7 +156,7 @@ did not mean it.
    `live_read_only_suite_never_mutates_auth_json` fingerprints the file's
    size and mtime (it never opens it), runs every read-only command, and
    fingerprints again.
-5. **Skipping is loud.** See the transcript above.
+5. **Unselected live tests are ignored by the test runner.** Explicitly selected tests without authorization fail before any backend call.
 
 ### Preconditions
 
@@ -171,16 +174,16 @@ did not mean it.
 
 ```sh
 # read-only tier: network + real credentials, zero quota
-ASKCODEX_LIVE=1 cargo test --test live
+ASKCODEX_LIVE=1 cargo test --test live -- --ignored --skip live_quota
 
 # everything, including the tier that spends 2 images + 1 message
-ASKCODEX_LIVE=1 ASKCODEX_LIVE_QUOTA=1 cargo test --test live
+ASKCODEX_LIVE=1 ASKCODEX_LIVE_QUOTA=1 cargo test --test live -- --ignored
 
 # one test at a time
-ASKCODEX_LIVE=1 cargo test --test live -- live_models
+ASKCODEX_LIVE=1 cargo test --test live live_models -- --ignored
 
 # serialize (the default runs several backend calls concurrently)
-ASKCODEX_LIVE=1 cargo test --test live -- --test-threads=1
+ASKCODEX_LIVE=1 cargo test --test live -- --ignored --skip live_quota --test-threads=1
 ```
 
 There is **no wall-clock timeout**. The client sets a connect timeout and
@@ -226,9 +229,11 @@ assert what has been verified.
 
 ### Adding a live test
 
-- Gate it. `live("your_test_name")` for read-only, `live_quota(...)` for
-  anything that spends quota. Both return the token that `run` needs, so a
-  test that returned early at its gate cannot reach the network by accident.
+- Add `#[ignore = "real backend and credentials; requires ASKCODEX_LIVE=1"]`
+  and call `live("your_test_name")` for read-only tests. Quota tests must
+  use `live_quota(...)` and name both gates and the quota cost in the ignore
+  reason. Both helpers fail without authorization and return the capability
+  required to run the binary.
 - Assert shape, not values. If the assertion would break when the user's
   plan, email, or model catalog changes, it is the wrong assertion.
 - Never put a payload, a parsed document, or a field value into a panic

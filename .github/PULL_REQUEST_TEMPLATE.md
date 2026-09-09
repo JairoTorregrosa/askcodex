@@ -25,7 +25,7 @@ proof. -->
 
 ## External assumptions
 
-<!-- Each belief about datan askcodex does not control — the auth.json schema,
+<!-- Each belief about data askcodex does not control — the auth.json schema,
 backend response shapes, OAuth refresh behavior, SSE event stream — and how
 each was verified against real (redacted) calls. Declare what you could not
 verify. -->
@@ -38,6 +38,16 @@ verify. -->
 
 <!-- Adversarial pass by a second agent or human: findings, resolution. -->
 
-## Human confirmation
+## Merge authorization
 
-- [ ] I am a human. I read the diff and the evidence above, and I take responsibility for this change.
+<!-- Name the maintainer authorizing delivery and describe any delegation to
+implement/merge. State whether independent human code review occurred; do not
+conflate delegated execution or an agent's second review with human review.
+GitHub permissions and configured review rules govern the actual merge. -->
+
+Authorization: <granted only when explicitly authorized>
+Maintainer: @<github-login>
+Scope: <concrete delegated scope>
+
+<!-- These self-declared fields do not authenticate identity or permission.
+Use exactly one of each field; duplicates/conflicts fail the gate. -->

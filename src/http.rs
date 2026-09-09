@@ -67,8 +67,13 @@ use ureq::http::{Method, Request, Response, Uri};
 
 use crate::config;
 use crate::error::Error;
-use crate::models::{AuthFile, AuthTokens};
+#[cfg(test)]
+use crate::models::AuthFile;
+use crate::models::AuthTokens;
 use crate::redact::Secret;
+
+mod target;
+use target::Target;
 
 /// Exact `Content-Type` ureq's `send_json` emits (the charset suffix is
 /// present). Kept byte-identical so the wire matches codex/ureq.
@@ -104,18 +109,10 @@ const TARGET_LABEL_BYTES: usize = 120;
 /// Authenticated client. One per process invocation.
 pub struct Client {
     agent: ureq::Agent,
-    auth: AuthFile,
+    session: crate::auth::AuthSession,
     no_refresh: bool,
 
-    /// OAuth token endpoint used by the ONE allowed refresh (pre-flight
-    /// and 401-retry alike).
-    ///
-    /// Always `config::TOKEN_URL` in production — [`Client::new`] is the
-    /// only constructor the shipped binary uses. It is a field rather than
-    /// a hard-coded const solely so that [`Client::with_token_url`] can
-    /// point an offline test at a localhost mock; it is NEVER read from
-    /// the environment, a config file, or a CLI flag (see that
-    /// constructor's docs for why that would be a security hole).
+    #[cfg(test)]
     token_url: String,
 }
 
@@ -127,40 +124,33 @@ enum RequestBody<'a> {
 }
 
 impl Client {
-    /// Build the agent (config above) and wrap the loaded credentials.
-    /// `no_refresh` disables BOTH the pre-flight refresh and the
-    /// 401-retry (contract of the global `--no-refresh` flag).
-    ///
-    /// This is the constructor production code uses: it pins the refresh
-    /// endpoint to [`config::TOKEN_URL`].
-    pub fn new(auth: AuthFile, no_refresh: bool) -> Result<Self, Error> {
-        Self::with_token_url(auth, no_refresh, config::TOKEN_URL)
+    #[cfg(test)]
+    /// Test fixture constructor; production receives an already loaded session.
+    pub(crate) fn new(auth: AuthFile, no_refresh: bool) -> Result<Self, Error> {
+        let session = crate::auth::AuthSession::from_document(
+            crate::auth::CredentialStore::configured()?,
+            auth,
+        );
+        Self::from_session(session, no_refresh)
     }
 
-    /// [`Client::new`] with an explicitly supplied OAuth token endpoint.
-    ///
-    /// Identical to [`Client::new`] in every respect except which host the
-    /// single 401 -> refresh -> retry (and the [`Client::ensure_fresh`]
-    /// pre-flight) posts the refresh token to.
-    ///
-    /// `token_url` EXISTS FOR TESTING AND FOR NOTHING ELSE: it is what
-    /// lets a black-box test drive a genuine 401 -> refresh -> retry
-    /// against a localhost mock without ever reaching `auth.openai.com`
-    /// with the user's real credentials. Production callers pass
-    /// [`config::TOKEN_URL`] — that is exactly what [`Client::new`] does,
-    /// and `new` is the only constructor askcodex itself calls.
-    ///
-    /// It must NEVER be wired to an environment variable, a config file,
-    /// or a CLI flag. An `ASKCODEX_TOKEN_URL`-style override was considered and
-    /// is deliberately REJECTED: the refresh request carries a LIVE
-    /// refresh token, so an externally settable endpoint would let
-    /// anything that can plant a variable in the user's environment
-    /// redirect that token to a host it controls. See
-    /// [`crate::auth::refresh_with_endpoint`] for the full rationale.
-    pub fn with_token_url(
+    #[cfg(test)]
+    /// Test-only OAuth destination override for isolated localhost mocks.
+    pub(crate) fn with_token_url(
         auth: AuthFile,
         no_refresh: bool,
         token_url: &str,
+    ) -> Result<Self, Error> {
+        let mut client = Self::new(auth, no_refresh)?;
+        client.token_url = token_url.to_owned();
+        Ok(client)
+    }
+
+    /// Build transport around the loaded session without resolving or reading its store again.
+    /// Automatic preflight and 401 refresh are both disabled by no_refresh.
+    pub(crate) fn from_session(
+        session: crate::auth::AuthSession,
+        no_refresh: bool,
     ) -> Result<Self, Error> {
         let agent: ureq::Agent = ureq::Agent::config_builder()
             // MANDATORY: keep non-2xx as Ok(response) so status AND body
@@ -184,9 +174,10 @@ impl Client {
 
         let client = Client {
             agent,
-            auth,
+            session,
             no_refresh,
-            token_url: token_url.to_string(),
+            #[cfg(test)]
+            token_url: config::TOKEN_URL.to_owned(),
         };
 
         // Fail at construction, not at the first request: a client that
@@ -197,31 +188,28 @@ impl Client {
         Ok(client)
     }
 
-    /// Read access to the loaded credentials (for `auth status` rendering
-    /// and tests). Never exposes token values beyond the `Secret` type.
-    pub fn auth(&self) -> &AuthFile {
-        &self.auth
+    #[cfg(test)]
+    /// Read-only fixture inspection. Production authentication stays in the session.
+    pub(crate) fn auth(&self) -> &AuthFile {
+        self.session.document()
     }
 
-    /// The shared agent (auth::refresh borrows it for the OAuth call).
-    pub fn agent(&self) -> &ureq::Agent {
-        &self.agent
-    }
-
-    /// Pre-flight freshness: when `no_refresh` is false and
-    /// `auth::needs_refresh(now)` is true, run the one allowed refresh
-    /// (which persists) against this client's token endpoint —
-    /// `config::TOKEN_URL` for every production client. Called once by
-    /// run.rs before dispatch for every command EXCEPT `auth status` /
-    /// `auth refresh` (they manage freshness themselves — Python parity).
+    /// Apply session freshness policy once, unless automatic refresh is disabled.
     pub fn ensure_fresh(&mut self) -> Result<(), Error> {
         if self.no_refresh {
             return Ok(());
         }
-        if crate::auth::needs_refresh(&self.auth, chrono::Utc::now())? {
-            self.refresh_once()?;
+        #[cfg(not(test))]
+        {
+            self.session.ensure_fresh(&self.agent, chrono::Utc::now())
         }
-        Ok(())
+        #[cfg(test)]
+        {
+            if crate::auth::needs_refresh(self.session.document(), chrono::Utc::now())? {
+                self.refresh_once()?;
+            }
+            Ok(())
+        }
     }
 
     /// Core request path. Contract:
@@ -385,7 +373,7 @@ impl Client {
         body: Option<RequestBody<'_>>,
         extra_headers: &[(&str, &str)],
     ) -> Result<Response<Body>, Error> {
-        let url = resolve_target(path)?;
+        let url = Target::resolve(path)?;
         let response = self.send_once(method, &url, body, extra_headers)?;
 
         if response.status().as_u16() != 401 {
@@ -415,15 +403,17 @@ impl Client {
         self.send_once(method, &url, body, extra_headers)
     }
 
-    /// The single refresh entry point.
-    ///
-    /// Goes through `auth::refresh_with_endpoint` rather than
-    /// `auth::refresh` so that the endpoint is the one this client was
-    /// built with — `config::TOKEN_URL` for every production client (see
-    /// [`Client::with_token_url`]). The refresh persists the rotated
-    /// tokens itself; nothing is retried here.
+    /// One refresh through the owned session. Alternate destinations exist only in tests.
     fn refresh_once(&mut self) -> Result<(), Error> {
-        crate::auth::refresh_with_endpoint(&self.agent, &mut self.auth, &self.token_url)
+        #[cfg(not(test))]
+        {
+            self.session.refresh(&self.agent)
+        }
+        #[cfg(test)]
+        {
+            self.session
+                .refresh_with_endpoint(&self.agent, &self.token_url)
+        }
     }
 
     /// Build and execute ONE request. No retry logic lives here.
@@ -433,17 +423,13 @@ impl Client {
     fn send_once(
         &self,
         method: &Method,
-        url: &str,
+        target: &Target,
         body: Option<RequestBody<'_>>,
         extra_headers: &[(&str, &str)],
     ) -> Result<Response<Body>, Error> {
-        // ORIGIN SCOPING, first statement in the function: no credential
-        // is even READ until the destination is known to be the one askcodex
-        // is credentialed for. It lives here, at the single point where
-        // the Authorization header is built, so that nothing — `raw`, an
-        // endpoint module, a future caller, the streaming path — can route
-        // around it. See `origin_permitted` for the `cfg!(test)` argument.
-        origin_permitted(url, cfg!(test))?;
+        // Only the checked target module can construct this capability.
+        // No raw URL can reach credential header construction.
+        let url = target.as_str();
 
         // The access token reaches exactly ONE destination: this header
         // value. It is assembled byte-wise rather than with `format!`
@@ -496,10 +482,10 @@ impl Client {
 
     /// The token bundle, or the loud "no usable credentials" error.
     fn tokens(&self) -> Result<&AuthTokens, Error> {
-        match self.auth.tokens.as_ref() {
+        match self.session.document().tokens.as_ref() {
             Some(tokens) => Ok(tokens),
             None => Err(Error::AuthTokensMissing {
-                path: config::auth_path()?,
+                path: self.session.path().to_path_buf(),
             }),
         }
     }
@@ -509,7 +495,7 @@ impl Client {
         match self.tokens()?.access_token.as_ref() {
             Some(token) if !token.is_empty() => Ok(token),
             _ => Err(Error::AuthTokensMissing {
-                path: config::auth_path()?,
+                path: self.session.path().to_path_buf(),
             }),
         }
     }
@@ -519,7 +505,7 @@ impl Client {
         match self.tokens()?.account_id.as_deref() {
             Some(id) if !id.is_empty() => Ok(id),
             _ => Err(Error::AuthAccountIdMissing {
-                path: config::auth_path()?,
+                path: self.session.path().to_path_buf(),
             }),
         }
     }
@@ -1168,11 +1154,9 @@ mod tests {
             "wrong error: {err:?}"
         );
 
-        // And the raw one-shot entry point, which takes an already
-        // resolved URL, refuses it too.
-        let err = client
-            .send_once(&Method::GET, foreign, None, &[])
-            .unwrap_err();
+        // The one-shot sender requires a checked target. A foreign URL
+        // cannot construct that value, even inside the transport module.
+        let err = Target::resolve(foreign).unwrap_err();
         assert!(
             matches!(err, Error::UntrustedOrigin { .. }),
             "wrong error: {err:?}"
@@ -1491,7 +1475,12 @@ mod tests {
 
         let client = client(false);
         let response = client
-            .send_once(&Method::GET, &server.url("/big"), None, &[])
+            .send_once(
+                &Method::GET,
+                &Target::resolve(&server.url("/big")).unwrap(),
+                None,
+                &[],
+            )
             .unwrap();
         let (_parts, body) = response.into_parts();
 
@@ -1518,7 +1507,12 @@ mod tests {
 
         let client = client(false);
         let response = client
-            .send_once(&Method::GET, &server.url("/big"), None, &[])
+            .send_once(
+                &Method::GET,
+                &Target::resolve(&server.url("/big")).unwrap(),
+                None,
+                &[],
+            )
             .unwrap();
         let (_parts, body) = response.into_parts();
         assert_eq!(read_body_limited(body, 1024).unwrap(), b"0123456789ABCDEF");

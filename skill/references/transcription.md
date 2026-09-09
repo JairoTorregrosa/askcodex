@@ -6,7 +6,9 @@ transcribes the supplied audio; it does not take an instruction prompt.
 ## Prepare the input
 
 Use a WAV file containing the speech to transcribe. The client accepts a
-RIFF/WAVE signature and enforces a 25 MiB upload limit. Convert other formats
+RIFF/WAVE signature and enforces a 25 MiB client memory limit, not a claimed
+server limit. Input must be a regular file; symlinks to regular files work,
+while devices and FIFOs are rejected before reading. Convert other formats
 before calling it; renaming an extension does not convert the audio.
 
 With FFmpeg installed:
@@ -30,7 +32,7 @@ For structured output:
 
 ```sh
 askcodex transcribe /tmp/askcodex/recording.wav --json --no-refresh > /tmp/askcodex/transcript.json
-jq -r .text /tmp/askcodex/transcript.json
+jq -r .result.text /tmp/askcodex/transcript.json
 ```
 
 Queue the call or use tmux when the recording may take minutes to process.
@@ -49,4 +51,5 @@ summarize, extract decisions, or format notes, supply the transcript to
 `askcodex ask` with a complete brief from [prompting-text.md](prompting-text.md).
 
 Do not promise a selected speech model, language hint, timestamps, speaker
-labels, or streaming output: this command provides none of those controls.
+labels, or incremental transcript output: this command provides none of those
+controls. `--events` emits the final transcript result when it completes.

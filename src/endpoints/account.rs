@@ -52,10 +52,6 @@ pub fn usage(client: &mut Client) -> Result<(UsageResponse, Value), Error> {
 
 /// `GET /me` (under `/backend-api`, NOT `/codex` — Python parity).
 /// Same typed+raw contract as [`usage`].
-pub fn me(client: &mut Client) -> Result<(MeResponse, Value), Error> {
-    me_at(client, "")
-}
-
 /// Compose `usage` + `me` into the whoami identity (email, name, user_id,
 /// account_id, plan_type). Both calls must succeed; there is no partial
 /// whoami. The returned struct is the `--json` output shape.

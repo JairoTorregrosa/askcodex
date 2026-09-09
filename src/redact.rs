@@ -9,8 +9,8 @@
 //!
 //! Guarantees:
 //! - `Debug` and `Display` NEVER print the inner value (probe-verified).
-//! - Serde is a transparent passthrough, so tokens round-trip byte-exact
-//!   when `auth.json` is rewritten.
+//! - Deserialize accepts credentials at input boundaries. Serialize is absent;
+//!   only private storage and OAuth adapters may emit an exposed value.
 //! - The only way to reach the value is the explicit [`Secret::expose`]
 //!   call. Grepping for `expose(` audits every use site. `expose()` results
 //!   must never be passed to any print/log/format macro — only into HTTP
@@ -18,18 +18,15 @@
 //!
 //! Deliberate non-goals (documented, not accidental): no memory zeroing
 //! (`zeroize`). The threat model is accidental printing/logging/committing,
-//! not process-memory forensics. The `secrecy` crate was evaluated and
-//! rejected after a build probe: `SecretString` does not implement
-//! `Serialize` (its `str` lacks `SerializableSecret`), and askcodex must write
-//! rotated tokens back to `auth.json`.
+//! not process-memory forensics. Runtime secrets cannot be serialized implicitly.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 /// The placeholder printed instead of any secret value.
 pub const REDACTED: &str = "REDACTED";
 
 /// A credential value that cannot be printed by accident.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize)]
 #[serde(transparent)]
 pub struct Secret(String);
 
@@ -84,16 +81,19 @@ mod tests {
     }
 
     #[test]
-    fn serde_is_transparent_round_trip() {
-        #[derive(Serialize, Deserialize)]
-        struct T {
-            access_token: Secret,
+    fn deserialize_is_explicit_and_runtime_credentials_are_not_serializable() {
+        let secret: Secret = serde_json::from_str("\"fixture-only\"").unwrap();
+        assert_eq!(secret.expose(), "fixture-only");
+        // If any runtime credential implements Serialize, type inference here
+        // becomes ambiguous and the test target fails to compile.
+        trait NotSerialize<A> {
+            fn check() {}
         }
-        let t: T = serde_json::from_str(r#"{"access_token":"tok-abc"}"#).unwrap();
-        assert_eq!(t.access_token.expose(), "tok-abc");
-        assert_eq!(
-            serde_json::to_string(&t).unwrap(),
-            r#"{"access_token":"tok-abc"}"#
-        );
+        impl<T: ?Sized> NotSerialize<()> for T {}
+        struct Serializable;
+        impl<T: ?Sized + serde::Serialize> NotSerialize<Serializable> for T {}
+        let _ = <Secret as NotSerialize<_>>::check;
+        let _ = <crate::models::AuthFile as NotSerialize<_>>::check;
+        let _ = <crate::models::AuthTokens as NotSerialize<_>>::check;
     }
 }

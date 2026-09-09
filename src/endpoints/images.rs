@@ -11,7 +11,7 @@
 //! never writes a file (the caller owns the output path).
 //!
 //! The same rule runs in the other direction. Every reference image is put
-//! on the wire labelled `data:image/png;base64,...`, so [`data_url`]
+//! on the wire labelled `data:image/png;base64,...`, so [`PreparedEdit::read`]
 //! verifies the PNG magic of the bytes it just read: askcodex does not assert a
 //! content type it has not checked, on the user's credential. A reference
 //! that is not a PNG is rejected locally, by path, BEFORE the (billed)
@@ -94,39 +94,72 @@ pub fn create(client: &mut Client, prompt: &str) -> Result<ImageResult, Error> {
 ///
 /// Every one of those input failures happens before `post_json`, so a
 /// request that was going to be refused is never billed.
+#[cfg(test)]
 pub fn edit(client: &mut Client, prompt: &str, inputs: &[&Path]) -> Result<ImageResult, Error> {
-    // Guard first, and on the count alone: rejecting six references must
-    // not depend on six files being readable, and must not cost a round
-    // trip the backend would refuse anyway.
-    if inputs.len() > config::MAX_EDIT_IMAGES {
-        return Err(Error::TooManyImages {
-            max: config::MAX_EDIT_IMAGES,
+    PreparedEdit::read(prompt, inputs)?.send(client)
+}
+
+/// Validated reference bytes, ready to upload without rereading local files.
+pub struct PreparedEdit {
+    body: Value,
+    count: usize,
+}
+
+impl std::fmt::Debug for PreparedEdit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedEdit")
+            .field("references", &self.count)
+            .finish()
+    }
+}
+
+impl PreparedEdit {
+    pub fn count(&self) -> usize {
+        self.count
+    }
+
+    pub fn read(prompt: &str, inputs: &[&Path]) -> Result<Self, Error> {
+        // Guard first, and on the count alone: rejecting six references must
+        // not depend on six files being readable, and must not cost a round
+        // trip the backend would refuse anyway.
+        if inputs.len() > config::MAX_EDIT_IMAGES {
+            return Err(Error::TooManyImages {
+                max: config::MAX_EDIT_IMAGES,
+                count: inputs.len(),
+            });
+        }
+
+        // Every input is resolved and encoded before the request is built, so
+        // a typo in the last path fails without having spent a backend call.
+        // (An EMPTY input list is not rejected here: clap requires `-i` with at
+        // least one value, and inventing a client-side rule the backend does
+        // not have would hide whatever it actually answers.)
+        let mut images = Vec::with_capacity(inputs.len());
+        let mut remaining = crate::input::MAX_MEDIA_BYTES;
+        for path in inputs {
+            let (image_url, bytes) = reference_data(path, remaining)?;
+            remaining -= bytes;
+            images.push(ImageRef { image_url });
+        }
+
+        let request = ImageEditRequest {
+            prompt: prompt.to_string(),
+            model: config::IMAGE_MODEL,
+            images,
+        };
+
+        let body = serde_json::to_value(&request)?;
+        Ok(Self {
+            body,
             count: inputs.len(),
-        });
+        })
     }
 
-    // Every input is resolved and encoded before the request is built, so
-    // a typo in the last path fails without having spent a backend call.
-    // (An EMPTY input list is not rejected here: clap requires `-i` with at
-    // least one value, and inventing a client-side rule the backend does
-    // not have would hide whatever it actually answers.)
-    let mut images = Vec::with_capacity(inputs.len());
-    for path in inputs {
-        images.push(ImageRef {
-            image_url: data_url(path)?,
-        });
+    pub fn send(&self, client: &mut Client) -> Result<ImageResult, Error> {
+        let response = client.post_json(&endpoint(EDITS_PATH), &self.body)?;
+
+        decode_image(response)
     }
-
-    let request = ImageEditRequest {
-        prompt: prompt.to_string(),
-        model: config::IMAGE_MODEL,
-        images,
-    };
-
-    let body = serde_json::to_value(&request)?;
-    let response = client.post_json(&endpoint(EDITS_PATH), &body)?;
-
-    decode_image(response)
 }
 
 // ---------------------------------------------------------------------------
@@ -165,7 +198,12 @@ fn endpoint(path: &str) -> String {
 /// over the user's credential, is the lie this check exists to prevent.
 /// The user gets "that file is not a PNG", with the path, instead of an
 /// opaque server-side rejection charged to their quota.
+#[cfg(test)]
 fn data_url(path: &Path) -> Result<String, Error> {
+    reference_data(path, crate::input::MAX_MEDIA_BYTES).map(|(url, _)| url)
+}
+
+fn reference_data(path: &Path, limit: u64) -> Result<(String, u64), Error> {
     // `try_exists`, not `exists`: the latter reports an unreadable parent
     // directory as "does not exist", which would send the user hunting for
     // a file that is right there.
@@ -179,8 +217,7 @@ fn data_url(path: &Path) -> Result<String, Error> {
         Err(source) => return Err(io_error(path, "cannot stat reference image", source)),
     }
 
-    let bytes = std::fs::read(path)
-        .map_err(|source| io_error(path, "cannot read reference image", source))?;
+    let bytes = crate::input::read_file(path, limit, "reference image")?;
 
     // `starts_with`, so a file SHORTER than the magic — an empty one
     // included — is refused here rather than slicing out of bounds, and
@@ -197,7 +234,7 @@ fn data_url(path: &Path) -> Result<String, Error> {
     url.push_str(DATA_URL_PREFIX);
     STANDARD.encode_string(&bytes, &mut url);
 
-    Ok(url)
+    Ok((url, bytes.len() as u64))
 }
 
 /// Wrap a filesystem failure so the message names the offending path

@@ -2,8 +2,8 @@
 """AGM gate: enforce agm.json on a pull request.
 
 Computes the risk zone from the changed files, checks the PR body for the
-declared zone, the required evidence sections, and the human-confirmation
-box, and scans the body for identifiers that should have been redacted.
+declared zone and the required evidence sections, including merge authorization,
+and scans the body for identifiers that should have been redacted.
 Writes the review packet to the job summary. Exits non-zero when a gate
 fails.
 
@@ -355,6 +355,94 @@ def scan_for_leaks(body):
 # ---------------------------------------------------------------------------
 
 
+def authorization_has_content(body, heading):
+    """Validate self-declared structured fields, not identity or permission."""
+    # Comments are recognized only outside fenced examples. Literal comment
+    # syntax inside code must not erase or manufacture a closing fence.
+    comment = False
+    active = False
+    seen = False
+    fence = None
+    prose = []
+    for line in body.splitlines():
+        marker = FENCE_RE.match(line)
+        if fence is not None:
+            if marker:
+                run = marker.group(1)
+                if run[0] == fence[0] and len(run) >= len(fence) and line.strip() == run:
+                    fence = None
+            continue
+        if not comment and line.expandtabs(4).startswith("    "):
+            continue
+        if not comment and marker:
+            fence = marker.group(1)
+            continue
+        visible = []
+        while line:
+            if comment:
+                end = line.find("-->")
+                if end < 0:
+                    break
+                comment = False
+                line = line[end + 3:]
+            else:
+                start = line.find("<!--")
+                if start < 0:
+                    visible.append(line)
+                    break
+                visible.append(line[:start])
+                line = line[start + 4:]
+                comment = True
+        line = "".join(visible)
+        # Indented Markdown examples cannot supply fields or change fence state.
+        if line.expandtabs(4).startswith("    "):
+            continue
+        stripped = line.strip()
+        marker = FENCE_RE.match(line)
+        if marker:
+            fence = marker.group(1)
+            continue
+        atx = re.match(r"^(#{1,6})[ \t]+(.*)$", stripped)
+        normalized_heading = stripped
+        if atx:
+            title = re.sub(r"[ \t]+#+[ \t]*$", "", atx.group(2)).strip()
+            normalized_heading = atx.group(1) + " " + title
+        if normalized_heading == heading:
+            if seen:
+                return False
+            seen = True
+            active = True
+            continue
+        if active and re.match(r"^#{1,2}(?:\s|$)", stripped):
+            active = False
+            continue
+        if not active or stripped.startswith("#"):
+            continue
+
+        prose.append(stripped)
+    fields = {}
+    for line in prose:
+        match = re.fullmatch(r"(Authorization|Maintainer|Scope):[ \t]*(.*)", line)
+        if match:
+            key, value = match.groups()
+            if key in fields:
+                return False
+            fields[key] = value.strip()
+    if fields.get("Authorization") != "granted":
+        return False
+    login = fields.get("Maintainer", "")
+    if not re.fullmatch(r"@[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}", login):
+        return False
+    scope = fields.get("Scope", "")
+    if not any(character.isalpha() for character in scope) or re.search(r"[<>\[\]]", scope):
+        return False
+    return not re.match(
+        r"^(?:todo|tbd|n/a|none|pending|placeholder|describe|replace|scope)(?:\W|$)",
+        scope, flags=re.IGNORECASE,
+    )
+
+
+
 def evidence_failures(manifest, body, computed):
     failures = []
 
@@ -371,14 +459,13 @@ def evidence_failures(manifest, body, computed):
     sections = manifest["sections"]
     for key in required:
         spec = sections[key]
-        if key == "confirmation":
-            if spec["checkbox"] not in body:
-                failures.append(
-                    "Human confirmation box is not checked "
-                    "(and only a human may check it)."
-                )
-        elif spec["heading"] not in body:
+        if spec["heading"] not in body:
             failures.append(f"Missing section `{spec['heading']}`: {spec['means']}")
+        elif key == "authorization" and not authorization_has_content(body, spec["heading"]):
+            failures.append(
+                "Section `## Merge authorization` requires Authorization: granted, Maintainer: @login, and "
+                "a concrete Scope: field; duplicate fields are rejected."
+            )
 
     return failures
 
@@ -431,7 +518,11 @@ def main():
             )
         lines.append("")
     if not failures and not leaks:
-        lines.append("All mechanical gates pass. Maintainer review remains.")
+        lines.append(
+            "All mechanical evidence gates pass. This does not authenticate "
+            "authorization or certify human review. GitHub merge permissions "
+            "and configured review requirements still apply."
+        )
 
     report = "\n".join(lines) + "\n"
     print(report)

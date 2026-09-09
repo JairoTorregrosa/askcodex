@@ -1,6 +1,6 @@
-//! The sanitization gate on `docs/samples/`.
+//! The sanitization and provenance gates on `docs/samples/` and `docs/captures/`.
 //!
-//! Those files are captured from real calls against a real account, and
+//! These directories contain redacted captures and explicitly adapted fixtures, and
 //! they are published. Everything that identifies the account is supposed
 //! to be replaced by the project's placeholders before the fixture is
 //! committed — and until this file existed, "supposed to" was the whole
@@ -40,13 +40,20 @@ fn samples_dir() -> PathBuf {
 }
 
 fn fixtures() -> Vec<(String, String)> {
-    let dir = samples_dir();
-    let mut out: Vec<(String, String)> = std::fs::read_dir(&dir)
-        .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("docs");
+    let mut out: Vec<(String, String)> = ["samples", "captures"]
+        .into_iter()
+        .flat_map(|name| {
+            std::fs::read_dir(dir.join(name)).unwrap_or_else(|e| panic!("read {name}: {e}"))
+        })
         .map(|entry| entry.expect("dir entry").path())
         .filter(|path| path.is_file())
         .map(|path| {
-            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            let name = path
+                .strip_prefix(&dir)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
             let body = std::fs::read_to_string(&path)
                 .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
             (name, body)
@@ -171,7 +178,7 @@ fn no_fixture_carries_an_account_or_user_identifier() {
             let hits = offenders(&body, |body| prefixed(body, prefix));
             assert!(
                 hits.is_empty(),
-                "docs/samples/{name} carries unredacted {prefix} identifier(s): {hits:?}\n\
+                "docs/{name} carries unredacted {prefix} identifier(s): {hits:?}\n\
                  Replace each with the declared placeholder ({prefix}_REDACTED). These \
                  files are published; a captured id belongs to a real account."
             );
@@ -185,7 +192,7 @@ fn no_fixture_carries_a_session_uuid() {
         let hits = offenders(&body, uuids);
         assert!(
             hits.is_empty(),
-            "docs/samples/{name} carries UUID(s): {hits:?}\n\
+            "docs/{name} carries UUID(s): {hits:?}\n\
              Replace each with uuid_REDACTED. A session key ties a published \
              transcript to the account that produced it."
         );
@@ -198,7 +205,7 @@ fn no_fixture_carries_an_email_address() {
         let hits = offenders(&body, emails);
         assert!(
             hits.is_empty(),
-            "docs/samples/{name} carries an email address: {hits:?}\n\
+            "docs/{name} carries an email address: {hits:?}\n\
              Replace it with email_REDACTED."
         );
     }
@@ -210,7 +217,7 @@ fn no_fixture_carries_a_token() {
         let hits = offenders(&body, jwts);
         assert!(
             hits.is_empty(),
-            "docs/samples/{name} contains a JWT-shaped string in {} place(s).\n\
+            "docs/{name} contains a JWT-shaped string in {} place(s).\n\
              A token must never be committed. If one was, it is not enough to \
              delete it: rotate the credential with `codex login`, because the \
              value is already in git history.",
@@ -219,7 +226,7 @@ fn no_fixture_carries_a_token() {
         let hits = offenders(&body, api_keys);
         assert!(
             hits.is_empty(),
-            "docs/samples/{name} contains {} API-key-shaped string(s).\n\
+            "docs/{name} contains {} API-key-shaped string(s).\n\
              askcodex never reads an API key, so one here can only have arrived by \
              accident — but it is still a live credential. Revoke it at \
              https://platform.openai.com/api-keys before removing it.",
@@ -238,7 +245,7 @@ fn no_fixture_carries_an_absolute_home_path() {
         for needle in ["/Users/", "/home/"] {
             assert!(
                 !body.contains(needle),
-                "docs/samples/{name} contains an absolute path under {needle}. \
+                "docs/{name} contains an absolute path under {needle}. \
                  Describe the evidence instead of pointing at a file only its \
                  author can open."
             );
@@ -316,4 +323,86 @@ fn the_gate_would_actually_fail() {
         assert!(offenders(clean, uuids).is_empty(), "{clean}");
         assert!(offenders(clean, api_keys).is_empty(), "{clean}");
     }
+}
+
+fn capture_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/captures/responses-sse-2026-08-07.txt")
+}
+
+#[test]
+fn original_redacted_capture_is_the_unchanged_historical_blob() {
+    let output = std::process::Command::new("git")
+        .args(["hash-object", "--no-filters", "--"])
+        .arg(capture_path())
+        .output()
+        .expect("Git is required for repository provenance verification");
+    assert!(
+        output.status.success(),
+        "cannot fingerprint historical capture"
+    );
+    assert_eq!(
+        std::str::from_utf8(&output.stdout).unwrap().trim(),
+        "b04691041fd3cdad5b4d70ba6cb17a7ca5c40276",
+        "historical capture changed; add a new dated capture instead of rewriting evidence"
+    );
+}
+
+#[test]
+fn adapted_sse_changes_only_the_declared_synthetic_sentinel() {
+    let original = std::fs::read_to_string(capture_path()).unwrap();
+    let adapted = std::fs::read_to_string(samples_dir().join("responses-sse.txt")).unwrap();
+    assert!(adapted.starts_with(": Provenance:"));
+    assert_eq!(original.ends_with('\n'), adapted.ends_with('\n'));
+    let original: Vec<_> = original.lines().collect();
+    let adapted: Vec<_> = adapted
+        .lines()
+        .skip_while(|line| line.starts_with(':') || line.is_empty())
+        .collect();
+    assert_eq!(original.len(), adapted.len(), "SSE framing changed");
+    let mut substitutions = 0;
+    for (original_line, adapted_line) in original.iter().zip(adapted) {
+        let Some(original_json) = original_line.strip_prefix("data: ") else {
+            assert_eq!(*original_line, adapted_line, "SSE event or framing changed");
+            continue;
+        };
+        let mut expected: serde_json::Value = serde_json::from_str(original_json).unwrap();
+        let actual: serde_json::Value = serde_json::from_str(
+            adapted_line
+                .strip_prefix("data: ")
+                .expect("missing data prefix"),
+        )
+        .unwrap();
+        match expected["type"].as_str().unwrap() {
+            "response.output_text.delta" => {
+                let replacement = match expected["delta"].as_str().unwrap() {
+                    "CS" => Some("ASK"),
+                    "UB" => Some("CODEX"),
+                    _ => None,
+                };
+                if let Some(replacement) = replacement {
+                    expected["delta"] = replacement.into();
+                    substitutions += 1;
+                }
+            }
+            "response.output_text.done"
+            | "response.content_part.done"
+            | "response.output_item.done" => {
+                let pointer = match expected["type"].as_str().unwrap() {
+                    "response.output_text.done" => "/text",
+                    "response.content_part.done" => "/part/text",
+                    _ => "/item/content/0/text",
+                };
+                let text = expected.pointer_mut(pointer).unwrap();
+                assert_eq!(text.as_str(), Some("CSUB-VERIFY-OK"));
+                *text = "ASKCODEX-VERIFY-OK".into();
+                substitutions += 1;
+            }
+            _ => {}
+        }
+        assert_eq!(
+            expected, actual,
+            "adaptation changed an undeclared payload field"
+        );
+    }
+    assert_eq!(substitutions, 5, "sentinel adaptation contract changed");
 }

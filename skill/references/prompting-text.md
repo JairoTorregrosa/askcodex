@@ -7,7 +7,7 @@ evaluate the output against the task.
 ## Choose the model and effort
 
 Read `askcodex models --json --no-refresh` when selecting a model. Choose from
-the returned `.models` catalog and check that model's supported efforts.
+the returned `.result.models` catalog and check that model's supported efforts.
 The installed CLI defaults to `gpt-5.6-sol` at `medium`; pin the choice when
 comparing outputs or when reproducibility matters.
 
@@ -49,7 +49,9 @@ and the request in the prompt. Align the two: conflicting length or format
 requirements waste the call.
 
 A local file path is not a substitute for its contents. Include the relevant
-text or pipe a complete brief to stdin. Do not assume this command has access
+text or pipe a complete brief to stdin (UTF-8, at most 16 MiB). This is a
+client memory cap, not a model context-window guarantee.
+Do not assume this command has access
 to the caller's repository, browsing session, or prior conversation.
 
 ## Run a request
@@ -65,7 +67,7 @@ For a prepared brief and a recoverable answer:
 ```sh
 mkdir -p /tmp/askcodex
 askcodex ask - --model gpt-5.6-sol --effort high --json < /tmp/askcodex/brief.txt > /tmp/askcodex/answer.json
-jq -r .text /tmp/askcodex/answer.json
+jq -r .result.text /tmp/askcodex/answer.json
 ```
 
 Create `brief.txt` with the actual inputs first. Check that the selected model
@@ -84,7 +86,7 @@ is available. Queue the invocation or use tmux when it may take minutes.
 | Creative writing | Audience, voice, purpose, examples, length | A complete draft in the requested register |
 
 For extraction, `--json` structures the CLI envelope, not the model's answer.
-The requested JSON is still text in `.text`; parse and validate it separately.
+The requested JSON is still text in `.result.text`; parse and validate it separately.
 
 For coding, request actual code or a diff when that is the deliverable.
 A model's claim that tests pass is not a test result. Run appropriate checks

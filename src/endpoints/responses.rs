@@ -85,7 +85,7 @@ pub struct AskAnswer {
 pub fn ask(
     client: &mut Client,
     request: &ResponsesRequest,
-    on_delta: &mut dyn FnMut(&str),
+    on_delta: &mut dyn FnMut(&str) -> Result<(), Error>,
 ) -> Result<AskAnswer, Error> {
     ask_at(client, RESPONSES_PATH, request, on_delta)
 }
@@ -101,7 +101,7 @@ fn ask_at(
     client: &mut Client,
     path: &str,
     request: &ResponsesRequest,
-    on_delta: &mut dyn FnMut(&str),
+    on_delta: &mut dyn FnMut(&str) -> Result<(), Error>,
 ) -> Result<AskAnswer, Error> {
     // `store: false` and `stream: true` are structural in ResponsesRequest
     // (frozen); serialization drops `instructions`/`reasoning` when the
@@ -121,7 +121,7 @@ fn ask_at(
 /// `on_delta`.
 fn consume_stream<R: BufRead>(
     reader: R,
-    on_delta: &mut dyn FnMut(&str),
+    on_delta: &mut dyn FnMut(&str) -> Result<(), Error>,
 ) -> Result<AskAnswer, Error> {
     let mut text = String::new();
 
@@ -144,7 +144,7 @@ fn consume_stream<R: BufRead>(
             // A delta event whose `delta` is absent classifies as an empty
             // string; it contributes nothing rather than inventing text.
             ResponsesSseEvent::OutputTextDelta(delta) => {
-                on_delta(&delta);
+                on_delta(&delta)?;
                 text.push_str(&delta);
             }
             // Terminal: stop consuming immediately. Anything the backend
@@ -325,7 +325,10 @@ mod tests {
         let mut deltas: Vec<String> = Vec::new();
         let mut client = client();
         let result = {
-            let mut on_delta = |d: &str| deltas.push(d.to_string());
+            let mut on_delta = |d: &str| {
+                deltas.push(d.to_string());
+                Ok(())
+            };
             ask_at(
                 &mut client,
                 &server.url("/codex/responses"),
@@ -449,7 +452,7 @@ mod tests {
             &mut client,
             &server.url("/codex/responses"),
             &request,
-            &mut |_| {},
+            &mut |_| Ok(()),
         )
         .unwrap();
 
@@ -475,7 +478,7 @@ mod tests {
             &mut client,
             &server.url("/codex/responses"),
             &prompt(),
-            &mut |_| {},
+            &mut |_| Ok(()),
         )
         .unwrap();
         mock.assert();
@@ -513,7 +516,7 @@ mod tests {
             &mut client,
             &server.url("/codex/responses"),
             &request,
-            &mut |_| {},
+            &mut |_| Ok(()),
         )
         .unwrap();
         mock.assert();
@@ -554,7 +557,10 @@ mod tests {
 
         let mut seen: Vec<(String, usize)> = Vec::new();
         let answer = {
-            let mut on_delta = |d: &str| seen.push((d.to_string(), served.get()));
+            let mut on_delta = |d: &str| {
+                seen.push((d.to_string(), served.get()));
+                Ok(())
+            };
             consume_stream(reader, &mut on_delta).unwrap()
         };
 
@@ -878,7 +884,10 @@ mod tests {
 
         let mut deltas: Vec<String> = Vec::new();
         let result = {
-            let mut on_delta = |d: &str| deltas.push(d.to_string());
+            let mut on_delta = |d: &str| {
+                deltas.push(d.to_string());
+                Ok(())
+            };
             consume_stream(reader, &mut on_delta)
         };
 
@@ -892,6 +901,40 @@ mod tests {
     // -----------------------------------------------------------------
     // snippet()
     // -----------------------------------------------------------------
+
+    #[test]
+    fn a_failed_sink_stops_before_reading_the_rest_of_the_stream() {
+        let stream = happy_stream();
+        let total = stream.len();
+        let served = Rc::new(Cell::new(0usize));
+        let reader = BufReader::with_capacity(
+            1,
+            CountingReader {
+                inner: Cursor::new(stream.into_bytes()),
+                served: Rc::clone(&served),
+            },
+        );
+        let mut calls = 0;
+        let mut bytes_at_failure = 0;
+        let result = consume_stream(reader, &mut |_| {
+            calls += 1;
+            bytes_at_failure = served.get();
+            Err(Error::Io(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "consumer closed",
+            )))
+        });
+        assert!(
+            matches!(result, Err(Error::Io(ref error)) if error.kind() == std::io::ErrorKind::BrokenPipe)
+        );
+        assert_eq!(calls, 1);
+        assert!(bytes_at_failure < total);
+        assert_eq!(
+            served.get(),
+            bytes_at_failure,
+            "stream read after sink failure"
+        );
+    }
 
     #[test]
     fn snippet_is_bounded_and_never_splits_a_codepoint() {

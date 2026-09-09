@@ -1,22 +1,44 @@
 #!/bin/sh
 # Installer for askcodex. Safe to re-run.
-# Builds the release binary, installs it to ~/.local/bin, and copies the
-# repo's skill/ directory to ~/.claude/skills/askcodex and ~/.agents/skills/askcodex
-# (moving any previous version aside first, and never overwriting an
-# existing backup, so there is always a rollback).
-#
-# This script is the executable form of the "Task: install askcodex for the
-# user" section of AGENTS.md. Beyond the build's own artifacts — step 1 is
-# `cargo build --release`, which writes this repo's target/ directory and
-# populates $CARGO_HOME (~/.cargo) and, through rustup, $RUSTUP_HOME
-# (~/.rustup) — it writes exactly three things:
-#   ~/.local/bin/askcodex, ~/.claude/skills/askcodex*, and ~/.agents/skills/askcodex*
-# It never uses sudo, never writes to ~/.codex, never edits
-# ~/.claude/settings.json, and never triggers a token refresh.
+# Default: build and install the binary without reading credentials.
+# --skills agents|claude|all explicitly synchronizes selected skill directories.
+# --check-auth explicitly checks credentials without refreshing or printing them.
+# Existing skill backups are never overwritten. No sudo or host configuration edits.
 set -eu
 
 say() { printf '%s\n' "$*"; }
-die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+die() {
+    printf 'error: %s\n' "$*" >&2
+    exit 1
+}
+
+usage() {
+    say 'Usage: ./install.sh [--skills agents|claude|all] [--check-auth]'
+    say 'Default: build and install ~/.local/bin/askcodex; no credentials required.'
+    say '--skills selects skill directories to synchronize (no authentication needed).'
+    say '--check-auth verifies stored credentials without refreshing them.'
+}
+SKILL_TARGET=none
+CHECK_AUTH=0
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+    --skills)
+        [ "$#" -ge 2 ] || die '--skills requires agents, claude, or all'
+        [ "$SKILL_TARGET" = none ] || die '--skills may only be specified once'
+        case "$2" in agents | claude | all) SKILL_TARGET="$2" ;; *) die '--skills requires agents, claude, or all' ;; esac
+        shift 2
+        ;;
+    --check-auth)
+        CHECK_AUTH=1
+        shift
+        ;;
+    --help | -h)
+        usage
+        exit 0
+        ;;
+    *) die "unknown option: $1" ;;
+    esac
+done
 
 # Every path below is resolved from the script's own location, never from
 # the caller's cwd: `sh /path/to/askcodex/install.sh` run from anywhere must
@@ -40,15 +62,15 @@ CARGO_VERSION="$(cargo --version 2>/dev/null | awk 'NR == 1 { print $2 }')"
 MSRV_HELP="askcodex needs Rust 1.88 or later. Update with \`rustup update\`, or install
        Rust from https://rustup.rs"
 case "$CARGO_VERSION" in
-    [0-9]*.[0-9]*) ;;
-    *) die "could not read a version out of \`cargo --version\` (got '$CARGO_VERSION'). $MSRV_HELP" ;;
+[0-9]*.[0-9]*) ;;
+*) die "could not read a version out of \`cargo --version\` (got '$CARGO_VERSION'). $MSRV_HELP" ;;
 esac
 CARGO_MAJOR="${CARGO_VERSION%%.*}"
 CARGO_MINOR="${CARGO_VERSION#*.}"
 CARGO_MINOR="${CARGO_MINOR%%.*}"
 CARGO_MINOR="${CARGO_MINOR%%-*}"
 case "$CARGO_MAJOR:$CARGO_MINOR" in
-    *[!0-9:]*) die "could not read a version out of \`cargo --version\` (got '$CARGO_VERSION'). $MSRV_HELP" ;;
+*[!0-9:]*) die "could not read a version out of \`cargo --version\` (got '$CARGO_VERSION'). $MSRV_HELP" ;;
 esac
 if [ "$CARGO_MAJOR" -lt 1 ] || { [ "$CARGO_MAJOR" -eq 1 ] && [ "$CARGO_MINOR" -lt 88 ]; }; then
     die "cargo $CARGO_VERSION is older than askcodex's minimum supported Rust. $MSRV_HELP"
@@ -72,9 +94,7 @@ install -m 755 "$BUILT" "$BIN" ||
     die "cannot write $BIN — check the permissions of $HOME/.local/bin"
 say "› installed $BIN"
 
-# --- postconditions 1 and 2: the binary runs, and it can read the tokens ---
-# Both checks run before anything under ~/.claude is touched, so a broken
-# install stops before it rewrites the user's skill directory.
+# Verify the installed binary before any optional operation.
 say "› verifying binary"
 "$BIN" --help >/dev/null || die "binary failed the smoke test"
 
@@ -89,17 +109,18 @@ say "› verifying binary"
 # would tell the reader nothing they could act on.
 AUTH_HELP='auth check failed. askcodex reads ChatGPT-subscription tokens from
        ${CODEX_HOME:-~/.codex}/auth.json. Run `codex login` with file
-       credential storage, then re-run ./install.sh.'
-"$BIN" auth status --no-refresh >/dev/null || die "$AUTH_HELP"
-say "› auth readable (nothing was refreshed, no secret was printed)"
+       credential storage, then re-run ./install.sh --check-auth.'
+if [ "$CHECK_AUTH" -eq 1 ]; then
+    "$BIN" auth status --no-refresh >/dev/null 2>&1 || die "$AUTH_HELP"
+    say "› auth readable (nothing was refreshed, no secret was printed)"
+fi
 
-# --- step 3: wire the skill, previous version moved aside -----------------
-# The skill is installed twice, with identical semantics: once for Claude
-# Code (~/.claude/skills) and once into the cross-agent skills directory
-# (~/.agents/skills), so agents that read either location find it.
+# Optional skill synchronization uses the existing safe replacement protocol.
 SRC="$REPO/skill"
-[ -d "$SRC" ] || die "skill directory not found at $SRC — install.sh must stay inside an askcodex checkout"
-[ -f "$SRC/SKILL.md" ] || die "$SRC/SKILL.md is missing — refusing to install an empty skill"
+if [ "$SKILL_TARGET" != none ]; then
+    [ -d "$SRC" ] || die "skill directory not found at $SRC — install.sh must stay inside an askcodex checkout"
+    [ -f "$SRC/SKILL.md" ] || die "$SRC/SKILL.md is missing — refusing to install an empty skill"
+fi
 
 # State shared with the EXIT trap. Each wire_skill call resets it; the trap
 # only ever has to unwind the destination currently in flight.
@@ -233,44 +254,52 @@ wire_skill() {
     LOCKED=""
 }
 
-wire_skill "$HOME/.claude/skills"
-DST1="$DST" BAK1="$BAK" SAME1="$SAME"
-wire_skill "$HOME/.agents/skills"
-DST2="$DST" BAK2="$BAK" SAME2="$SAME"
+DST1="" BAK1="" SAME1=0
+DST2="" BAK2="" SAME2=0
+if [ "$SKILL_TARGET" = claude ] || [ "$SKILL_TARGET" = all ]; then
+    wire_skill "$HOME/.claude/skills"
+    DST1="$DST" BAK1="$BAK" SAME1="$SAME"
+fi
+if [ "$SKILL_TARGET" = agents ] || [ "$SKILL_TARGET" = all ]; then
+    wire_skill "$HOME/.agents/skills"
+    DST2="$DST" BAK2="$BAK" SAME2="$SAME"
+fi
 
 # What the user should type afterwards: the bare name only if the bare name
 # really resolves to what was just installed.
 RUN="askcodex"
 case ":${PATH-}:" in
-    *":$HOME/.local/bin:"*)
-        # `askcodex` on PATH must be the binary this run wrote. An older copy
-        # earlier in PATH (~/.cargo/bin from `cargo install`, Homebrew, a
-        # shim) would shadow it, and every command in the skill uses the
-        # bare name.
-        # cmp, not just a path comparison: a second path holding the very
-        # same bytes (a link, a mirrored bin directory) is not a shadow.
-        RESOLVED="$(command -v askcodex 2>/dev/null || :)"
-        if [ -n "$RESOLVED" ] && [ "$RESOLVED" != "$BIN" ] && ! cmp -s "$RESOLVED" "$BIN"; then
-            RUN="$BIN"
-            say ""
-            say "note: \`askcodex\` on your PATH resolves to"
-            say "      $RESOLVED,"
-            say "      not the binary this installer just wrote. That copy shadows"
-            say "      $BIN. Remove it, put $HOME/.local/bin"
-            say "      earlier in PATH, or call $BIN by its full path."
-        fi
-        ;;
-    *)
+*":$HOME/.local/bin:"*)
+    # `askcodex` on PATH must be the binary this run wrote. An older copy
+    # earlier in PATH (~/.cargo/bin from `cargo install`, Homebrew, a
+    # shim) would shadow it, and every command in the skill uses the
+    # bare name.
+    # cmp, not just a path comparison: a second path holding the very
+    # same bytes (a link, a mirrored bin directory) is not a shadow.
+    RESOLVED="$(command -v askcodex 2>/dev/null || :)"
+    if [ -n "$RESOLVED" ] && [ "$RESOLVED" != "$BIN" ] && ! cmp -s "$RESOLVED" "$BIN"; then
         RUN="$BIN"
         say ""
-        say "note: $HOME/.local/bin is not on your PATH. Add it, or invoke"
-        say "      $BIN by its full path."
-        ;;
+        say "note: \`askcodex\` on your PATH resolves to"
+        say "      $RESOLVED,"
+        say "      not the binary this installer just wrote. That copy shadows"
+        say "      $BIN. Remove it, put $HOME/.local/bin"
+        say "      earlier in PATH, or call $BIN by its full path."
+    fi
+    ;;
+*)
+    RUN="$BIN"
+    say ""
+    say "note: $HOME/.local/bin is not on your PATH. Add it, or invoke"
+    say "      $BIN by its full path."
+    ;;
 esac
 
 # Per-destination rollback line for the report below.
 report_skill() {
-    _dst="$1"; _bak="$2"; _same="$3"
+    _dst="$1"
+    _bak="$2"
+    _same="$3"
     say "  skill  : $_dst"
     if [ -n "$_bak" ]; then
         say "  rollback: rm -rf \"$_dst\" && mv \"$_bak\" \"$_dst\""
@@ -289,8 +318,7 @@ report_skill() {
 say ""
 say "done."
 say "  binary : $BIN  (rollback: rm -f \"$BIN\")"
-report_skill "$DST1" "$BAK1" "$SAME1"
-report_skill "$DST2" "$BAK2" "$SAME2"
+[ -z "$DST1" ] || report_skill "$DST1" "$BAK1" "$SAME1"
+[ -z "$DST2" ] || report_skill "$DST2" "$BAK2" "$SAME2"
 say ""
 say "run \`$RUN --help\` to start, or \`$RUN auth status --no-refresh\` for token expiry."
-say "The skill is live in Claude Code."

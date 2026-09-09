@@ -30,9 +30,14 @@ fn persist_recovery_hint(path: &Path, backup: &Option<PathBuf>) -> String {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
-    #[error("failed to read audio file {path}: {source}")]
-    AudioFileUnreadable {
+    #[error("invalid input: {reason}")]
+    InvalidInput { reason: &'static str },
+    #[error("input exceeds the {limit_bytes}-byte client limit")]
+    InputTooLarge { limit_bytes: u64 },
+    #[error("failed to read {kind} file {path}: {source}")]
+    InputFileUnreadable {
         path: PathBuf,
+        kind: &'static str,
         #[source]
         source: std::io::Error,
     },
@@ -146,7 +151,7 @@ pub enum Error {
 
     /// A JSON response decoded, but not into the documented shape.
     /// `context` names the endpoint and the missing/mismatched part, e.g.
-    /// "image response missing data[0].b64_json; keys=[...]".
+    /// `image response missing data[0].b64_json; keys=[...]`.
     #[error("unexpected response shape: {context}")]
     UnexpectedResponse { context: String },
 
@@ -213,8 +218,7 @@ pub enum Error {
     /// holding a generation the server has already retired.
     #[error(
         "another askcodex process is refreshing credentials ({path})\n\
-         Retry in a moment. If no other askcodex is running, remove the stale \
-         lock file."
+         Retry after the other process exits. Do not delete the lock file."
     )]
     AuthLockUnavailable {
         path: PathBuf,
@@ -224,6 +228,56 @@ pub enum Error {
 }
 
 impl Error {
+    /// Stable machine classification; message wording may evolve independently.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::InvalidInput { .. }
+            | Self::InvalidAudio { .. }
+            | Self::TooManyImages { .. }
+            | Self::InputImageNotPng { .. }
+            | Self::Json(_) => "input_invalid",
+            Self::InputFileUnreadable { .. } | Self::InputImageMissing { .. } => "input_unreadable",
+            Self::InputTooLarge { .. } => "input_invalid",
+            Self::NoHomeDir
+            | Self::AuthFileMissing { .. }
+            | Self::AuthTokensMissing { .. }
+            | Self::AuthAccountIdMissing { .. } => "auth_required",
+            Self::AuthFileUnreadable { .. }
+            | Self::AuthFileInvalid { .. }
+            | Self::JwtInvalid { .. } => "auth_invalid",
+            Self::RefreshUnavailable
+            | Self::RefreshFailed { .. }
+            | Self::RefreshInvalidResponse { .. } => "auth_refresh_failed",
+            Self::PersistFailed { .. } => "auth_persist_failed",
+            Self::AuthLockUnavailable { .. } => "auth_busy",
+            Self::HttpStatus { status: 429, .. } => "rate_limited",
+            Self::HttpStatus { status: 401, .. } => "auth_required",
+            Self::HttpStatus { .. } => "http_error",
+            Self::NonJsonResponse { .. }
+            | Self::UnexpectedResponse { .. }
+            | Self::ImageNotPng { .. } => "response_invalid",
+            Self::SseStream { .. } => "stream_failed",
+            Self::Transport(_) => "transport_error",
+            Self::Io(_) => "io_error",
+            Self::UntrustedOrigin { .. } => "untrusted_origin",
+        }
+    }
+
+    /// Write operational diagnostics to stderr without polluting result stdout.
+    pub fn write_diagnostic(
+        &self,
+        out: &mut dyn std::io::Write,
+        machine: bool,
+    ) -> std::io::Result<()> {
+        if machine {
+            let value = serde_json::json!({"schema_version": 1, "error": {"code": self.code(), "message": self.to_string()}});
+            serde_json::to_writer(&mut *out, &value)?;
+            out.write_all(b"\n")
+        } else {
+            writeln!(out, "askcodex: error: {self}")
+        }
+    }
+
     /// Process exit code for this error. Uniformly 1 (clap owns usage
     /// errors and exits 2 on its own; SIGINT terminates by default).
     pub fn exit_code(&self) -> i32 {

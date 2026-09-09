@@ -25,8 +25,9 @@ use crate::redact::Secret;
 /// Round-trip contract: every key askcodex does not model is preserved
 /// byte-for-byte as a JSON value through `extra` (probe-verified, including
 /// null-valued legacy keys, which askcodex must never name in code). `Option`
-/// fields skip serialization when absent so a rewrite never invents keys.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// fields are emitted by the private credential-store adapter only when present.
+/// Runtime credentials intentionally do not implement Serialize.
+#[derive(Clone, Deserialize)]
 pub struct AuthFile {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_mode: Option<String>,
@@ -45,7 +46,7 @@ pub struct AuthFile {
 /// The `tokens` object inside `auth.json`. All credential values are
 /// [`Secret`]s; `account_id` is not a credential but must still be redacted
 /// in anything destined for the repo or evidence files.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct AuthTokens {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id_token: Option<Secret>,
@@ -77,24 +78,6 @@ pub fn parse_last_refresh(s: &str) -> Result<chrono::DateTime<chrono::Utc>, chro
 // OAuth refresh (POST https://auth.openai.com/oauth/token)
 // ---------------------------------------------------------------------------
 
-/// Refresh request body. `grant_type` is always `"refresh_token"`.
-#[derive(Debug, Serialize)]
-pub struct RefreshRequest {
-    pub client_id: &'static str,
-    pub grant_type: &'static str,
-    pub refresh_token: Secret,
-}
-
-impl RefreshRequest {
-    pub fn new(refresh_token: Secret) -> Self {
-        RefreshRequest {
-            client_id: crate::config::CLIENT_ID,
-            grant_type: "refresh_token",
-            refresh_token,
-        }
-    }
-}
-
 /// Refresh response. `access_token` is required by askcodex (checked loudly in
 /// auth.rs — `Error::RefreshInvalidResponse` carries the key names);
 /// `id_token` and `refresh_token` rotate only when present. Other fields
@@ -113,7 +96,7 @@ pub struct RefreshResponse {
 // GET /codex/usage
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct UsageResponse {
     pub email: Option<String>,
     pub user_id: Option<String>,
@@ -122,7 +105,7 @@ pub struct UsageResponse {
     pub rate_limit: Option<RateLimit>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RateLimit {
     pub limit_reached: Option<bool>,
     pub allowed: Option<bool>,
@@ -130,7 +113,7 @@ pub struct RateLimit {
     pub secondary_window: Option<RateWindow>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RateWindow {
     pub used_percent: Option<f64>,
     pub limit_window_seconds: Option<u64>,
@@ -162,13 +145,13 @@ pub struct WhoamiOutput {
 // GET /codex/models?client_version=...
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ModelsResponse {
     #[serde(default)]
     pub models: Vec<ModelInfo>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ModelInfo {
     pub slug: String,
     #[serde(default)]
@@ -178,7 +161,7 @@ pub struct ModelInfo {
     pub visibility: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ReasoningLevel {
     pub effort: Option<String>,
 }
@@ -354,6 +337,29 @@ pub struct AskOutput {
     pub usage: Option<Value>,
 }
 
+impl std::fmt::Debug for AuthFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthFile")
+            .field("has_auth_mode", &self.auth_mode.is_some())
+            .field("tokens", &self.tokens)
+            .field("has_last_refresh", &self.last_refresh.is_some())
+            .field("extra_field_count", &self.extra.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for AuthTokens {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthTokens")
+            .field("id_token", &self.id_token)
+            .field("access_token", &self.access_token)
+            .field("refresh_token", &self.refresh_token)
+            .field("has_account_id", &self.account_id.is_some())
+            .field("extra_field_count", &self.extra.len())
+            .finish_non_exhaustive()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -362,7 +368,7 @@ mod tests {
     fn auth_file_round_trip_preserves_unknown_and_null_keys() {
         let input = r#"{"auth_mode":"chatgpt","legacy_null_key":null,"tokens":{"id_token":"i","access_token":"a","refresh_token":"r","account_id":"acct_REDACTED","future":123},"last_refresh":"2026-08-07T23:32:41.615755Z","future_key":{"x":1}}"#;
         let parsed: AuthFile = serde_json::from_str(input).unwrap();
-        let out = serde_json::to_string(&parsed).unwrap();
+        let out = crate::auth::test_document(&parsed).to_string();
         let a: Value = serde_json::from_str(input).unwrap();
         let b: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(a, b);
@@ -376,7 +382,7 @@ mod tests {
     fn absent_optional_keys_stay_absent_on_rewrite() {
         let input = r#"{"tokens":{"access_token":"a","account_id":"x"}}"#;
         let parsed: AuthFile = serde_json::from_str(input).unwrap();
-        let out = serde_json::to_string(&parsed).unwrap();
+        let out = crate::auth::test_document(&parsed).to_string();
         assert!(!out.contains("last_refresh"));
         assert!(!out.contains("id_token"));
         assert!(!out.contains("refresh_token"));
@@ -448,16 +454,5 @@ mod tests {
             ResponsesSseEvent::classify(&untyped),
             ResponsesSseEvent::Other
         );
-    }
-
-    #[test]
-    fn refresh_request_wire_shape() {
-        let req = RefreshRequest::new(Secret::new("rt"));
-        let v = serde_json::to_value(&req).unwrap();
-        assert_eq!(v["client_id"], crate::config::CLIENT_ID);
-        assert_eq!(v["grant_type"], "refresh_token");
-        assert_eq!(v["refresh_token"], "rt"); // serializes for the wire...
-        let dbg = format!("{req:?}");
-        assert!(!dbg.contains("rt\"")); // ...but never appears in Debug
     }
 }

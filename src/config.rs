@@ -25,9 +25,8 @@ pub const TRANSCRIBE_PATH: &str = "/transcribe";
 /// refresh request carries a LIVE refresh token, so an endpoint settable
 /// from the environment, a config file, or a CLI flag would be a
 /// credential-exfiltration primitive. The one legitimate way to point the
-/// refresh somewhere else is the explicit test-only parameter of
-/// [`crate::auth::refresh_with_endpoint`] /
-/// [`crate::http::Client::with_token_url`]; both document the rule.
+/// refresh somewhere else is through the explicit test-only constructors.
+/// Production sessions always use this fixed endpoint.
 pub const TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 
 /// OAuth client id of the codex CLI app (from the access-token `client_id`
