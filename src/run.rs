@@ -59,31 +59,31 @@ fn run_with_io(
             reason: "raw preserves the wire response and cannot use --events",
         });
     }
-    if cli.cmd.name() == "reference" {
-        let reference = crate::cli::reference();
-        return if mode == Mode::Text {
-            emit_human(out, &reference)
-        } else {
-            emit_result(
-                out,
-                mode,
-                "reference",
-                &json!({"markdown": reference}),
-                None,
-            )
-        };
-    }
     // Resolve every local input before reading or refreshing credentials.
     let resolved = resolve(cli.cmd, stdin)?;
-    let session = auth::AuthSession::load(auth::CredentialStore::configured()?)?;
+    let load_session = || auth::AuthSession::load(auth::CredentialStore::configured()?);
 
     match resolved {
+        Resolved::Reference => {
+            let reference = crate::cli::reference();
+            if mode == Mode::Text {
+                emit_human(out, &reference)
+            } else {
+                emit_result(
+                    out,
+                    mode,
+                    "reference",
+                    &json!({"markdown": reference}),
+                    None,
+                )
+            }
+        }
         // Step 3a: `auth` manages its own freshness — no client, no
         // pre-flight refresh (Python parity).
-        Resolved::Auth(cmd) => run_auth(cmd, session, mode, out),
+        Resolved::Auth(cmd) => run_auth(cmd, load_session()?, mode, out),
         // Step 3b: everything else authenticates first.
         Resolved::Backend(cmd) => {
-            let mut client = Client::from_session(session, cli.no_refresh)?;
+            let mut client = Client::from_session(load_session()?, cli.no_refresh)?;
             // A no-op when `--no-refresh` is set (the flag's contract).
             client.ensure_fresh()?;
             run_backend(cmd, &mut client, mode, out, err)

@@ -6,6 +6,7 @@ pub(super) const STDIN_MARKER: &str = "-";
 
 #[derive(Debug)]
 pub(super) enum Resolved {
+    Reference,
     Auth(AuthCmd),
     Backend(Backend),
 }
@@ -45,11 +46,7 @@ pub(super) enum Backend {
 
 pub(super) fn resolve(cmd: Cmd, stdin: &mut dyn Read) -> Result<Resolved, Error> {
     let resolved = match cmd {
-        Cmd::Reference => {
-            return Err(Error::InvalidInput {
-                reason: "reference is a local command",
-            });
-        }
+        Cmd::Reference => Resolved::Reference,
         Cmd::Transcribe { file } => Resolved::Backend(Backend::Transcribe {
             upload: endpoints::transcription::Upload::read(&file)?,
         }),

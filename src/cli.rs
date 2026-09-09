@@ -142,32 +142,6 @@ pub enum Cmd {
     },
 }
 
-impl Cmd {
-    pub(crate) fn name(&self) -> &'static str {
-        match self {
-            Self::Reference => "reference",
-            Self::Transcribe { .. } => "transcribe",
-            Self::Whoami => "whoami",
-            Self::Usage => "usage",
-            Self::Models { .. } => "models",
-            Self::Image {
-                cmd: ImageCmd::Create { .. },
-            } => "image create",
-            Self::Image {
-                cmd: ImageCmd::Edit { .. },
-            } => "image edit",
-            Self::Ask { .. } => "ask",
-            Self::Raw { .. } => "raw",
-            Self::Auth {
-                cmd: AuthCmd::Status,
-            } => "auth status",
-            Self::Auth {
-                cmd: AuthCmd::Refresh,
-            } => "auth refresh",
-        }
-    }
-}
-
 /// Generate documentation from the same command tree that parses user input.
 pub fn reference() -> String {
     fn visit(mut command: clap::Command, name: &str, output: &mut String) {

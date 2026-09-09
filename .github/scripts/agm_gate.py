@@ -355,6 +355,47 @@ def scan_for_leaks(body):
 # ---------------------------------------------------------------------------
 
 
+def authorization_has_content(body, heading):
+    """Require bounded visible prose, not proof of identity or permission."""
+    # Comments and fenced examples are not submitted evidence. An unclosed
+    # comment is a template fragment, not authorization prose.
+    body = re.sub(r"<!--.*?(?:-->|$)", "", body, flags=re.DOTALL)
+    active = False
+    fence = None
+    prose = []
+    for line in body.splitlines():
+        stripped = line.strip()
+        marker = re.match(r"^(`{3,}|~{3,})", stripped)
+        if marker:
+            run = marker.group(1)
+            if fence is None:
+                fence = run
+            elif run[0] == fence[0] and len(run) >= len(fence):
+                fence = None
+            continue
+        if fence is not None:
+            continue
+        if stripped == heading:
+            if active:
+                break
+            active = True
+            continue
+        if active and re.match(r"^#{1,2}(?:\s|$)", stripped):
+            break
+        if not active or stripped.startswith("#"):
+            continue
+        normalized = stripped.strip("-*_` []").casefold()
+        if re.match(r"^(?:todo|tbd|n/a|none|pending|placeholder)(?:\W|$)", normalized):
+            continue
+        # Angle placeholders and unchecked template boxes cannot supply words.
+        stripped = re.sub(r"<[^>]*>|\[[ xX]?\]", "", stripped)
+        prose.append(stripped)
+    words = re.findall(r"[^\W_]+", " ".join(prose), flags=re.UNICODE)
+    words = [word for word in words if word.casefold() not in
+             {"todo", "tbd", "placeholder", "maintainer", "scope"}]
+    return len(words) >= 3
+
+
 def evidence_failures(manifest, body, computed):
     failures = []
 
@@ -373,6 +414,11 @@ def evidence_failures(manifest, body, computed):
         spec = sections[key]
         if spec["heading"] not in body:
             failures.append(f"Missing section `{spec['heading']}`: {spec['means']}")
+        elif key == "authorization" and not authorization_has_content(body, spec["heading"]):
+            failures.append(
+                "Section `## Merge authorization` needs visible maintainer and delegation "
+                "scope evidence, not an empty heading or template placeholder."
+            )
 
     return failures
 

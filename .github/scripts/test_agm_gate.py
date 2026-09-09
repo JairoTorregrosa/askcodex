@@ -264,6 +264,53 @@ class MergeAuthorizationTests(unittest.TestCase):
         self.assertIn("does not authenticate authorization or certify human review", result.stdout)
 
 
+class AuthorizationContentTests(unittest.TestCase):
+    def failures_for(self, content):
+        return agm_gate.evidence_failures(
+            MANIFEST, body_for("critical", omit=("authorization",),
+                               extra="## Merge authorization\n\n" + content), "critical")
+
+    def test_empty_whitespace_and_comment_templates_fail(self):
+        for content in ["", " \n\t", "<!-- Name maintainer and scope -->",
+                        "<!-- unfinished template"]:
+            with self.subTest(content=content):
+                self.assertEqual(len(self.failures_for(content)), 1)
+
+    def test_placeholder_only_content_fails(self):
+        for content in ["TODO", "TBD", "- [ ]", "<maintainer> <scope>",
+                        "TODO: name the maintainer and describe scope",
+                        "Maintainer: TODO\nScope: TBD", "### Maintainer and scope"]:
+            with self.subTest(content=content):
+                self.assertEqual(len(self.failures_for(content)), 1)
+
+    def test_prose_in_another_section_cannot_fill_empty_authorization(self):
+        for heading in ["## Notes", "# Another section"]:
+            self.assertEqual(len(self.failures_for(
+                heading + "\nJairo authorized implementation and merge.")), 1)
+
+    def test_authorization_in_comment_or_code_is_not_visible_evidence(self):
+        for content in [
+            "<!-- Jairo authorized implementation and merge. -->",
+            "```text\nJairo authorized implementation and merge.\n```",
+            "~~~text\nJairo authorized implementation and merge.\n~~~",
+        ]:
+            self.assertEqual(len(self.failures_for(content)), 1)
+
+    def test_heading_only_embedded_in_prose_is_not_an_authorization_section(self):
+        body = body_for("critical", omit=("authorization",),
+                        extra="See ## Merge authorization for maintainer delivery scope.")
+        self.assertEqual(len(agm_gate.evidence_failures(MANIFEST, body, "critical")), 1)
+
+    def test_visible_delegation_prose_passes_without_identity_claims(self):
+        self.assertEqual(self.failures_for(
+            "<!-- template guidance -->\nJairo authorized implementation and merge. "
+            "No human code review is claimed."), [])
+
+    def test_subsections_can_hold_real_authorization_prose(self):
+        self.assertEqual(self.failures_for(
+            "### Delivery\nJairo delegated implementation and merge execution."), [])
+
+
 class RedactionCatchTests(unittest.TestCase):
     """The scan must catch a real leak — in any zone, inside a fence or not."""
 
