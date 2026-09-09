@@ -160,7 +160,7 @@ const DEAD_PROXY: &str = "http://127.0.0.1:1";
 /// askcodex's own wording for a transport failure. Its PRESENCE proves a
 /// request was attempted (and refused by the dead proxy); its ABSENCE
 /// proves a command failed before the network.
-const TRANSPORT_ERROR: &str = "askcodex: error: http transport error";
+const TRANSPORT_ERROR: &str = "http transport error";
 
 /// A minimal but real PNG header. Reference images are never sent anywhere
 /// in these tests; the bytes exist so the files are not empty.
@@ -475,6 +475,43 @@ impl Run {
     /// next to an error would be worse than no payload).
     fn assert_askcodex_error(&self, needles: &[&str]) -> &Self {
         self.assert_code(1).assert_stdout_empty();
+        if self
+            .args
+            .split_whitespace()
+            .any(|arg| arg == "--json" || arg == "--events")
+        {
+            let stderr = self.stderr();
+            let mut lines: Vec<&str> = stderr.lines().collect();
+            let document = parse_single_json_document(lines.pop().expect("missing JSON error"));
+            assert_eq!(sorted_keys(&document), ["error", "schema_version"]);
+            assert_eq!(document["schema_version"], json!(1));
+            assert_eq!(sorted_keys(&document["error"]), ["code", "message"]);
+            assert!(
+                document["error"]["code"]
+                    .as_str()
+                    .is_some_and(|code| !code.is_empty())
+            );
+            let message = document["error"]["message"]
+                .as_str()
+                .expect("string error message");
+            for needle in needles {
+                assert!(message.contains(needle), "error message missing {needle:?}");
+            }
+            if self.args.split_whitespace().any(|arg| arg == "--stream") {
+                assert_eq!(
+                    lines,
+                    [
+                        "askcodex: note: --json does not apply to `raw --stream`; stdout carries the raw event stream"
+                    ]
+                );
+            } else {
+                assert!(
+                    lines.is_empty(),
+                    "machine stderr has extraneous diagnostics"
+                );
+            }
+            return self;
+        }
         assert!(
             self.stderr().starts_with("askcodex: error: ")
                 || contains(&self.stderr, b"\naskcodex: error: "),
@@ -543,6 +580,17 @@ fn parse_single_json_document(text: &str) -> Value {
     serde_json::from_str(text).unwrap_or_else(|e| {
         panic!("stdout is not exactly one JSON document ({e}):\n{text}");
     })
+}
+
+fn parse_semantic_result(text: &str, command: &str) -> Value {
+    let mut document = parse_single_json_document(text);
+    assert_eq!(document["schema_version"], json!(1));
+    assert_eq!(document["command"], json!(command));
+    assert_eq!(
+        sorted_keys(&document),
+        ["command", "result", "schema_version"]
+    );
+    document["result"].take()
 }
 
 /// The sorted key set of a JSON object, for exact-shape assertions.
@@ -795,6 +843,7 @@ const CREDENTIALED_COMMANDS: &[&[&str]] = &[
 #[test]
 fn missing_auth_json_fails_every_credentialed_command() {
     let home = TempHome::new("auth-missing");
+    home.write_file("ref.png", PNG_BYTES);
     let expected_path = home.auth_path_display();
 
     for command in CREDENTIALED_COMMANDS {
@@ -812,7 +861,7 @@ fn missing_auth_json_fails_every_credentialed_command() {
     }
 
     // askcodex must not have invented an auth file to make itself work.
-    home.assert_entries(&[]);
+    home.assert_entries(&["ref.png"]);
 }
 
 #[test]
@@ -820,6 +869,7 @@ fn missing_auth_json_keeps_stdout_empty_under_json() {
     // `--json` must not turn a failure into a half-written document on
     // stdout: the error still goes to stderr and stdout stays byte-empty.
     let home = TempHome::new("auth-missing-json");
+    home.write_file("ref.png", PNG_BYTES);
     for command in CREDENTIALED_COMMANDS {
         let mut args = vec!["--json", "--no-refresh"];
         args.extend_from_slice(command);
@@ -827,7 +877,7 @@ fn missing_auth_json_keeps_stdout_empty_under_json() {
             .assert_askcodex_error(&["auth file not found"])
             .assert_no_request_attempted();
     }
-    home.assert_entries(&[]);
+    home.assert_entries(&["ref.png"]);
 }
 
 #[test]
@@ -879,6 +929,7 @@ fn no_codex_home_and_no_home_fails_loudly() {
 #[test]
 fn malformed_auth_json_is_reported_and_never_rewritten() {
     let home = TempHome::new("auth-malformed");
+    home.write_file("ref.png", PNG_BYTES);
     // Invalid JSON: an unquoted key and no closing brace.
     let original = "{ auth_mode: chatgpt, \"tokens\": {\n";
     home.write_auth(original);
@@ -897,7 +948,7 @@ fn malformed_auth_json_is_reported_and_never_rewritten() {
         // user's tokens.
         home.assert_auth_untouched(&before);
     }
-    home.assert_entries(&["auth.json"]);
+    home.assert_entries(&["auth.json", "ref.png"]);
     assert_eq!(
         String::from_utf8(home.read_auth_bytes()).expect("utf8"),
         original,
@@ -908,6 +959,7 @@ fn malformed_auth_json_is_reported_and_never_rewritten() {
 #[test]
 fn auth_json_without_tokens_explains_the_keyring_case() {
     let home = TempHome::new("auth-no-tokens");
+    home.write_file("ref.png", PNG_BYTES);
     home.write_auth("{\"auth_mode\": \"chatgpt\", \"last_refresh\": null}\n");
     let before = home.read_auth_bytes();
     let expected_path = home.auth_path_display();
@@ -1132,11 +1184,11 @@ fn ask_dash_reads_the_prompt_from_stdin() {
     let home = TempHome::new("ask-stdin");
     home.write_valid_auth();
 
-    // Invalid UTF-8 on stdin. `run::read_stdin` is the ONLY thing in askcodex
+    // Invalid UTF-8 on stdin. the stdin preparation code is the ONLY thing in askcodex
     // that can produce this message, so seeing it proves `ask -` consumed
     // stdin — and that it did so before touching the network.
     Run::new(&home, &["--no-refresh", "ask", "-"], b"\xff\xfe")
-        .assert_askcodex_error(&["io error: reading stdin"])
+        .assert_askcodex_error(&["stdin must be UTF-8 text"])
         .assert_no_request_attempted();
 }
 
@@ -1150,7 +1202,7 @@ fn ask_with_a_literal_prompt_does_not_read_stdin() {
 
     Run::new(&home, &["--no-refresh", "ask", "hello"], b"\xff\xfe")
         .assert_askcodex_error(&[])
-        .assert_stderr_lacks("reading stdin")
+        .assert_stderr_lacks("stdin must be UTF-8 text")
         .assert_stderr_has(TRANSPORT_ERROR);
 }
 
@@ -1165,7 +1217,7 @@ fn raw_body_dash_reads_the_body_from_stdin() {
         &["--no-refresh", "raw", "POST", "/x", "--body", "-"],
         b"\xff\xfe",
     )
-    .assert_askcodex_error(&["io error: reading stdin"])
+    .assert_askcodex_error(&["stdin must be UTF-8 text"])
     .assert_no_request_attempted();
 
     // 2. Empty stdin -> "EOF while parsing a value", i.e. askcodex parsed an
@@ -1272,7 +1324,7 @@ fn auth_status_json_is_exactly_one_document_on_stdout() {
 
     let run = askcodex(&home, &["--json", "--no-refresh", "auth", "status"]);
     run.assert_ok();
-    let doc = parse_single_json_document(&run.stdout());
+    let doc = parse_semantic_result(&run.stdout(), "auth status");
 
     // The EXACT key set, not a containment check: this is what proves askcodex
     // reports claims and adds nothing else — no `access_token`, no
@@ -1315,12 +1367,12 @@ fn global_flags_are_accepted_after_the_deepest_subcommand() {
     // Same invocation, flags trailing rather than leading.
     let trailing = askcodex(&home, &["auth", "status", "--no-refresh", "--json"]);
     trailing.assert_ok();
-    let trailing_doc = parse_single_json_document(&trailing.stdout());
+    let trailing_doc = parse_semantic_result(&trailing.stdout(), "auth status");
 
     // ... and in front, for parity.
     let leading = askcodex(&home, &["--no-refresh", "--json", "auth", "status"]);
     leading.assert_ok();
-    let leading_doc = parse_single_json_document(&leading.stdout());
+    let leading_doc = parse_semantic_result(&leading.stdout(), "auth status");
 
     // Flag POSITION must not change the result. Only the countdown differs
     // between two runs a moment apart, so it is compared out.
@@ -1372,7 +1424,8 @@ fn raw_stream_with_json_announces_that_json_does_not_apply() {
     );
     // Refused at the socket: no event stream was ever received, so stdout
     // stayed empty (asserted by assert_askcodex_error).
-    run.assert_stderr_has(TRANSPORT_ERROR);
+    run.assert_stderr_has("transport_error");
+    run.assert_stderr_has("http transport error");
 }
 
 // ---------------------------------------------------------------------------

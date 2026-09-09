@@ -21,8 +21,9 @@ use clap::Parser;
 
 fn main() {
     let cli = askcodex::Cli::parse();
+    let machine = cli.json || cli.events;
     if let Err(e) = askcodex::run(cli) {
-        eprintln!("askcodex: error: {e}");
+        let _ = e.write_diagnostic(&mut std::io::stderr().lock(), machine);
         std::process::exit(e.exit_code());
     }
 }

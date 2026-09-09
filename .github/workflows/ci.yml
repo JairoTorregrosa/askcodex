@@ -72,6 +72,14 @@ jobs:
         run: cargo test --locked
       - name: Build
         run: cargo build --release --locked
+      - name: Verify generated command reference
+        run: |
+          target/release/askcodex reference > target/command-reference.md
+          diff -u docs/COMMANDS.md target/command-reference.md
+      - name: Verify internal documentation
+        env:
+          RUSTDOCFLAGS: -Dwarnings
+        run: cargo doc --no-deps --document-private-items --locked
 
   scripts:
     # The two files agm.json puts in the CRITICAL zone that no other job
@@ -82,10 +90,8 @@ jobs:
     # the only thing watching it. `install.sh` is what writes to users'
     # machines.
     #
-    # Neither check needs a toolchain, a cache, or a network fetch: python3
-    # and shellcheck both ship on ubuntu-latest. Keep it that way — this job
-    # is the one that can still run when everything else is broken, and it
-    # pulls no third-party action beyond the pinned checkout.
+    # Installer behavioral tests use fake cargo and temporary homes. The shell
+    # tools come from Ubuntu packages; no additional third-party action is needed.
     runs-on: ubuntu-latest
     steps:
       # Pin this to a SHA too — see the note in the `check` job above.
@@ -99,7 +105,15 @@ jobs:
       - name: Lint the installer
         # install.sh declares #!/bin/sh and shellcheck reads the shebang, so
         # this checks it as POSIX sh — the dialect it promises to be.
-        run: shellcheck install.sh
+        run: shellcheck install.sh tests/install.bats
+      - name: Install shell test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bats shfmt
+      - name: Check installer formatting
+        run: shfmt -d -i 4 install.sh tests/install.bats
+      - name: Test the installer
+        run: bats tests/install.bats
 
   msrv:
     # Cargo.toml declares rust-version — the oldest toolchain askcodex promises to

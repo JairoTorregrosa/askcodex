@@ -15,7 +15,9 @@ the prompt and, for edits, the reference PNGs.
 | Produce several variants | Make separate calls; keep the brief fixed except for the variable being explored |
 
 Save each version to a distinct PNG path under `/tmp/askcodex/`.
-The CLI accepts up to five PNG references with `-i`.
+The CLI accepts up to five PNG references with `-i`, totaling at most 25 MiB.
+This is a client memory cap, not a backend limit. References must be regular
+files; symlinks to regular files are supported. Devices and FIFOs are rejected.
 
 ## Write a visual brief
 
@@ -39,8 +41,8 @@ use rather than relying on words such as "stunning" or "high quality."
 
 Framing belongs in the prompt, but it does not guarantee file dimensions.
 The CLI has no size, quality, transparency, format, batch, or image-model
-selector. Plan for one PNG per call, and inspect the result before promising
-an exact resolution or a transparent background.
+selector. Observed backend responses contain one opaque PNG at server-selected
+dimensions. Inspect the result; do not promise an exact resolution or transparency.
 
 ## Adapt to the visual product
 

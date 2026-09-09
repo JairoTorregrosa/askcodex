@@ -1,91 +1,110 @@
 # Security
 
-askcodex reads and rewrites a live OAuth credential — the ChatGPT/Codex
-subscription tokens `codex login` stored in `${CODEX_HOME:-~/.codex}/auth.json`.
-A bug here does not produce a wrong number; it hands someone else an account,
-or locks the owner out of theirs. This file states what askcodex guarantees, what
-it does not, and how to report a failure of either.
+askcodex uses the ChatGPT/Codex subscription credentials in
+`${CODEX_HOME:-~/.codex}/auth.json`. Credential renewal and persistence are
+security-sensitive operations. This document describes the protections and
+their limits; [DESIGN.md](DESIGN.md) explains the implementation boundaries.
 
-## Reporting a vulnerability
+## Report a vulnerability
 
-Report privately through GitHub's
-[security advisories](https://github.com/JairoTorregrosa/askcodex/security/advisories/new).
-Do not open a public issue for a credential-handling flaw.
+Report credential-handling vulnerabilities privately through
+[GitHub security advisories](https://github.com/JairoTorregrosa/askcodex/security/advisories/new).
+Use fabricated credentials in reproductions. Never include real tokens,
+account identifiers, user identifiers, or email addresses. If credentials
+were exposed, sign in again with `codex login` before reporting.
 
-**Never include a real token, `account_id`, `user_id`, or email address in a
-report.** A reproduction can always be written against a fabricated
-`auth.json`; the maintainer will not ask for a real one. If you believe your
-own credentials were exposed by an askcodex bug, rotate them first with
-`codex login`, then report.
+Expect acknowledgement within a week. This is a single-maintainer project.
 
-Expect an acknowledgement within a week. This is a single-maintainer project,
-so please size your disclosure timeline accordingly.
+## Credential destinations
 
-## What askcodex guarantees
+Backend requests attach bearer and account headers only to the origin derived
+from the fixed `config::BASE_URL`, comparing scheme, host and effective port.
+Raw arguments are checked during parsing; the private `http/target::Target`
+constructor enforces the policy before the sender can attach credentials.
+A foreign host or HTTP downgrade is rejected. Test-only loopback injection
+does not exist in the production interface.
 
-These are invariants, enforced by code and by tests that fail if they break.
+Refresh tokens go only to the fixed OAuth endpoint in `config::TOKEN_URL`.
+Neither destination can be widened through a flag, environment variable or
+configuration file. Backend and OAuth requests disable redirects; OAuth
+enforces this at request scope independently of the supplied agent's defaults.
 
-**Credentials go to exactly one origin.** The backend host is the
-compile-time constant `config::BASE_URL`, and the trusted origin is derived
-from it rather than written down a second time. The bearer token and
-`chatgpt-account-id` header are attached only to requests aimed at that
-origin. `askcodex raw` takes its target from the command line and is therefore
-checked twice: once in the argument parser, and again as the first statement
-of the function that builds the request. Scheme equality is part of the
-comparison, so an `http://` downgrade of the backend host is refused too.
+The origin boundary restricts where credentials go. `raw` can still invoke
+arbitrary operations on the trusted backend. It is not an endpoint allowlist.
 
-There is deliberately **no environment variable and no flag that widens the
-trusted origin.** Such a knob is the same vulnerability with a supported
-name, and requests for one will be declined.
+## Credential representation and storage
 
-**Token values cannot be printed.** Every token rides in a `Secret` newtype
-whose `Debug` and `Display` render a redaction, so a value cannot reach a log
-line, an error message, a panic, or a test fixture by accident.
-`Secret::expose()` is the single, greppable exposure path and belongs in HTTP
-headers and bodies. No `*_token: String` field exists in the crate. Errors
-carry claim *names*, HTTP statuses, and bounded body snippets — never values.
+`Secret` redacts Debug and Display output. `Secret`, `AuthFile` and
+`AuthTokens` have no general Serialize implementation. Private adapters in
+`auth/store` and the OAuth boundary explicitly expose values only where
+persistence or protocol transmission requires them. Credential Debug output
+also hides unknown fields; parse diagnostics omit document values.
 
-**`auth.json` is rewritten atomically or not at all.** A same-directory temp
-file is created `0600` by the kernel before the first byte is written, then
-flushed, fsynced, and renamed, with a backup taken first. On every path the
-file is either the complete old document or the complete new one, and keys
-askcodex does not model round-trip untouched. A refresh whose HTTP call fails
-leaves both the file and memory alone, because the previous refresh token is
-still valid and discarding it would lock the user out. Concurrent refreshes
-are serialized by a lock on the credential file; askcodex refuses rather than let
-two processes rotate the same token.
+`CredentialStore` retains one resolved path. `AuthSession` owns the loaded
+document and its store, so transport construction does not independently
+resolve environment variables or load another credential generation.
 
-**No API key, ever.** `OPENAI_API_KEY` is not read, not accepted, and not a
-fallback. The only credential source is the subscription tokens on disk.
+Persistence preserves unknown JSON keys. Backup and temporary files are
+created with mode 0600 before bytes are written; the replacement is flushed,
+synced and atomically renamed within the same directory. A failed remote
+renewal does not discard the stored tokens. A persistence failure after
+remote rotation is different: the previous backup may already contain an
+invalid refresh token, so the error reports recovery information. Directory
+entry durability across power loss is not guaranteed.
 
-**Nothing in this repository is a credential.** Every committed fixture is
-fabricated, every transcript is redacted to `acct_REDACTED` / `user_REDACTED`
-/ `email_REDACTED`, and no test reads or writes the real `~/.codex` — every
-test that touches auth points `CODEX_HOME` at a temp directory. Live tests
-are opt-in behind `ASKCODEX_LIVE=1` and never run in CI; CI holds no credentials.
+A kernel-held exclusive lock spans credential reread, renewal and persistence.
+Its `.lock` file is a persistent regular inode, opened without following
+symlinks and with close-on-exec. It is not unlinked based on age or PID.
+Process exit releases the lock automatically.
 
-## What askcodex does not protect against
+This lock coordinates cooperating current askcodex processes. Codex and older
+askcodex versions with an unlink-based lock do not participate. Rereading under
+the lock can adopt a newer token generation; it cannot exclude arbitrary
+external writers or guarantee preservation of concurrent same-token metadata edits.
 
-Stated plainly, because an unlisted limitation reads as a guarantee.
+`--no-refresh` disables automatic renewal. Explicit `auth refresh` still
+requests rotation. Default installation neither reads credentials nor installs
+skills; `--check-auth` performs a no-refresh check and suppresses its account
+details. Skill installation is separately selected with `--skills`.
 
-- **A compromised local account.** `auth.json` is a file readable by its
-  owner. Anything running as that user can read it directly, with or without
-  askcodex. askcodex does not add a passphrase, a keyring, or an enclave.
-- **The system keyring.** If codex stored the credentials in the keyring
-  rather than the file, askcodex says so and exits non-zero. It does not read the
-  keyring.
-- **What you do with `raw`.** `askcodex raw` can call any backend path on the
-  trusted origin, including ones askcodex does not model. The origin check bounds
-  *where* your credential goes, not *what* you ask that origin to do.
-- **Prompt injection reaching your shell.** askcodex is a well-behaved target — a
-  hostile URL is refused — but an agent that can run arbitrary commands as
-  you can read `auth.json` without askcodex's help. Sandbox the agent, not the
-  CLI.
-- **The backend itself.** The wire protocol is reverse-engineered and
-  documented in [docs/PROTOCOL.md](docs/PROTOCOL.md) with each claim marked
-  verified-live or declared unverified. It can change without notice.
+## Inputs, output and tests
+
+Local inputs are prepared before credentials are loaded. Stdin is bounded to
+16 MiB UTF-8; WAV files and the combined image references each have a 25 MiB
+client budget. Media must be regular files, including regular symlink targets;
+devices and FIFOs are rejected. These are memory policies, not backend limits.
+Responses are capped at 64 MiB. A failed stream consumer stops further reading.
+
+Operational failures exit nonzero and go to stderr. Machine output follows
+[docs/OUTPUT.md](docs/OUTPUT.md); partial deltas are never a successful final
+result. Account output and backend payloads can contain personal information:
+the Secret type does not sanitize arbitrary backend text or user-supplied data.
+Redact material before sharing logs or transcripts.
+
+Offline tests use fabricated credentials in temporary stores and loopback
+HTTP. Committed evidence consists of redacted captures and clearly identified
+adapted fixtures; see [capture provenance](docs/captures/README.md).
+Live tests are ignored by default and require explicit execution plus
+authorization gates. They never run in CI, never refresh credentials and
+are the documented exception that reads real credentials. CI holds no account
+credentials. See [testing](docs/TESTING.md) for exact commands and costs.
+
+`OPENAI_API_KEY` is not read, accepted or used as a fallback. Keyring-only
+Codex credentials are not supported.
+
+## Limits of protection
+
+- A process running as the local user can read that user’s credential file.
+  askcodex does not provide an enclave, passphrase or additional user boundary.
+- An agent allowed to execute arbitrary shell commands can bypass askcodex.
+  Origin validation does not sandbox that agent or prevent prompt injection.
+- Backend responses and protocol behavior can change without notice.
+  [Protocol evidence](docs/PROTOCOL.md) records dated observations and unverified
+  assumptions; offline tests cannot establish current backend compatibility.
+- The credential lock does not coordinate external applications, and atomic
+  replacement cannot reverse a successful server-side token rotation.
 
 ## Supported versions
 
-Only the latest release. This project is pre-1.0; fixes land on `main` and
-ship in the next tag.
+Only the latest release is supported. Fixes land on `main` and ship in the
+next tag.

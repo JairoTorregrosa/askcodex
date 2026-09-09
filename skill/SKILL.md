@@ -51,7 +51,7 @@ version suffixes so edits do not overwrite a useful result.
 
 - Images: always pass `-o /tmp/askcodex/<name>-v1.png`.
 - Long text answers: use `--json > /tmp/askcodex/<name>.json`; read the answer
-  with `jq -r .text /tmp/askcodex/<name>.json`.
+  with `jq -r .result.text /tmp/askcodex/<name>.json`.
 - Keep large JSON documents and image payloads out of the conversation.
 - Report the outcome, any material limitation, and the artifact path. Display
   the image when the user needs to assess it visually.
@@ -59,32 +59,51 @@ version suffixes so edits do not overwrite a useful result.
 
 ## Use the command surface accurately
 
-- `--json` and `--no-refresh` are global flags and work after subcommands.
-- `ask` streams text normally. With `--json`, it prints one document after
-  completion containing `model`, `effort`, `text`, and `usage`. Usage may be null.
-- `models --json` returns an envelope: read `.models`, not the root as an array.
-- `transcribe` prints transcript text; `--json` preserves the response object. It accepts
-  WAV files up to a 25 MiB client limit, with no model or language selector.
+- `--json`, `--events`, and `--no-refresh` are global flags and work after subcommands.
+- Semantic `--json` success output is `{schema_version:1,command,result,backend?}`.
+  Read `.result` for the command result; optional `.backend` contains the original
+  response and may change independently of the askcodex schema.
+- `ask` streams text normally. With `--json`, one final envelope contains
+  `.result.model`, `.result.effort`, `.result.text`, and `.result.usage` (possibly null).
+- Read the catalog at `.result.models` and usage windows at `.result.rate_limit`.
+- `--events` emits newline-delimited JSON: `ask` sends `text_delta` events and
+  one final `result` event on success. Other semantic commands emit their result.
+  Check the exit status; partial text is not success. Do not combine with `--json`.
+- `transcribe` returns text or `.result.text` in JSON mode. It accepts WAV files
+  up to a 25 MiB client limit, with no model or language selector.
+- Stdin prompts and `raw --body -` accept up to 16 MiB of UTF-8 text. File inputs
+  must be regular files; symlinks to regular files work, devices and FIFOs do not.
+  These size caps are client memory policies, not server limits.
+- `reference` generates the CLI reference locally without credentials or network.
 - `ask` accepts `--model`, `--effort`, and `--instructions`. Use the available
   model catalog to choose a slug and a supported effort.
 - `image create` and `image edit` have no model, size, quality, transparency,
   output-format, or batch selector. Plan for one PNG per call and inspect its
   actual dimensions. Do not promise transparent output or an exact resolution.
-- `image edit` accepts up to five PNG references. Renaming a JPEG to `.png`
+- `image edit` accepts up to five PNG references totaling at most 25 MiB.
+  Renaming a JPEG to `.png`
   does not convert it; the CLI checks the file signature.
 - `raw` is for an explicitly needed backend operation:
   `askcodex raw <METHOD> <PATH> --body '<JSON>'`. It accepts only the configured
-  backend origin. Use the regular commands for the workflows above.
+  backend origin. Its JSON and stream bytes remain unwrapped; `--events` is
+  unsupported. Use the regular commands for the workflows above.
 
 ## Authentication and errors
 
 The executable is `~/.local/bin/askcodex`. It uses credentials already stored
-by `codex login`. If the executable is missing, installation instructions are
-in [the askcodex repository](https://github.com/JairoTorregrosa/askcodex).
+by `codex login` with file credential storage. In a checkout, `./install.sh`
+installs the binary without requiring authentication. `./install.sh --skills agents` installs the cross-agent skill; use
+`claude` for Claude Code or `all` for both destinations. `./install.sh --check-auth` explicitly checks credentials without
+refreshing. See [the repository](https://github.com/JairoTorregrosa/askcodex)
+for installation and the [generated command reference](https://github.com/JairoTorregrosa/askcodex/blob/main/docs/COMMANDS.md).
 
 Use `--no-refresh` for read-only account and authentication checks.
 `askcodex auth refresh` rotates credentials and rewrites the auth file; use it
 when the user requests a refresh. Never print credentials.
+
+With `--json` or `--events`, failures put a structured error on stderr:
+`{schema_version:1,error:{code,message}}`. No final success result is emitted.
+Never turn a partial stream into a completed answer.
 
 On a nonzero exit, report the error and resolve its cause before another
 attempt. Do not loop, fabricate a result, or silently switch models.

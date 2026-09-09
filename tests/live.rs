@@ -1,8 +1,8 @@
 //! Opt-in LIVE integration tests: they call the real ChatGPT/Codex backend
 //! with the caller's real ChatGPT-subscription credentials.
 //!
-//! Run them with `ASKCODEX_LIVE=1 cargo test --test live` (see docs/TESTING.md).
-//! Without that variable every test here is a no-op that says so out loud.
+//! Ignored by default; explicit --ignored runs also require authorization gates.
+//! See docs/TESTING.md for read-only and quota commands.
 //!
 //! ## This suite NEVER refreshes a token
 //!
@@ -30,7 +30,7 @@
 //!   the user's subscription quota: two image generations and one `ask`
 //!   message. Running the read-only tier can never trigger these.
 //!
-//! Accepted values are exactly `1` (run) and unset/empty (skip). Anything
+//! Accepted values are exactly `1` (run) and unset/empty (no authorization). Anything
 //! else panics rather than silently skipping: a user who typed
 //! `ASKCODEX_LIVE=true` and saw a green run would believe the backend was
 //! verified when it was not.
@@ -144,37 +144,25 @@ fn gates() -> (bool, bool) {
     (live, quota)
 }
 
-/// Gate for a read-only live test. `None` means: skip, loudly.
-fn live(test: &str) -> Option<Live> {
-    let (live, _quota) = gates();
-    if !live {
-        notice(&format!(
-            "{test}: skipped — set {LIVE_VAR}=1 to run (real backend, real credentials, no quota spent)"
-        ));
-        return None;
-    }
+/// Authorization is required even when a caller explicitly selects ignored tests.
+fn live(test: &str) -> Live {
+    let (enabled, _) = gates();
+    assert!(
+        enabled,
+        "{test}: requires ASKCODEX_LIVE=1 (real backend and credentials)"
+    );
     self_check();
-    Some(Live(()))
+    Live(())
 }
 
-/// Gate for a live test that spends the user's subscription quota.
-fn live_quota(test: &str) -> Option<Live> {
-    let (live, quota) = gates();
-    if !live {
-        notice(&format!(
-            "{test}: skipped — set {LIVE_VAR}=1 {QUOTA_VAR}=1 to run (real backend; SPENDS your quota)"
-        ));
-        return None;
-    }
-    if !quota {
-        notice(&format!(
-            "{test}: skipped — {LIVE_VAR}=1 is set but {QUOTA_VAR} is not, and this test \
-             spends your image/message quota; set {QUOTA_VAR}=1 to run it"
-        ));
-        return None;
-    }
+fn live_quota(test: &str) -> Live {
+    let (enabled, quota) = gates();
+    assert!(
+        enabled && quota,
+        "{test}: requires ASKCODEX_LIVE=1 ASKCODEX_LIVE_QUOTA=1 (spends subscription quota)"
+    );
     self_check();
-    Some(Live(()))
+    Live(())
 }
 
 /// Verify this file's own safety machinery before it is relied upon.
@@ -182,8 +170,7 @@ fn live_quota(test: &str) -> Option<Live> {
 /// Both checks guard something a live run cannot recover from: a broken
 /// scrubber would leak identity into a failure message, and a corrupted
 /// reference PNG would burn image quota on a request that was doomed. They
-/// live here, inside the gate, so that "every test in this file is a no-op
-/// unless ASKCODEX_LIVE=1" stays literally true.
+/// run after explicit authorization and before any backend request.
 fn self_check() {
     assert_eq!(
         scrub("acct_abc123 user_xyz789 someone@example.com eyJhbGciOiJub25lIn0.e30.sig"),
@@ -209,22 +196,6 @@ fn self_check() {
         (REFERENCE_PNG_SIDE, REFERENCE_PNG_SIDE),
         "the embedded reference PNG has unexpected dimensions"
     );
-}
-
-/// Print a line that survives libtest's output capture.
-///
-/// `println!`/`eprintln!` are captured and shown only for FAILING tests, so
-/// a skipped tier announced with them would be invisible in exactly the
-/// case that matters: a green run that verified nothing. Writing to the
-/// `Stdout` handle bypasses the capture (verified), so the skip lines show
-/// up in a plain `cargo test`.
-///
-/// A notice that cannot be written is a failure: it would make an invisible
-/// skip, which is the thing this function exists to prevent.
-fn notice(line: &str) {
-    let mut out = std::io::stdout();
-    writeln!(out, "askcodex live: {line}").expect("writing the live-test notice to stdout");
-    out.flush().expect("flushing the live-test notice");
 }
 
 // ---------------------------------------------------------------------------
@@ -297,6 +268,7 @@ struct Run {
     /// The argv, made of test-authored literals only (never backend data),
     /// so it is safe to name in a failure message.
     command: String,
+    raw: bool,
     status: std::process::ExitStatus,
     stdout: Vec<u8>,
     stderr: String,
@@ -321,6 +293,7 @@ impl Live {
 
         Run {
             command: args.join(" "),
+            raw: args.iter().find(|arg| !arg.starts_with('-')) == Some(&"raw"),
             status: output.status,
             stdout: output.stdout,
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
@@ -367,7 +340,7 @@ impl Run {
     /// The payload is never included in the panic message: it carries the
     /// caller's account data. serde_json errors report a line/column, which
     /// is enough to debug a shape change without printing the shape.
-    fn json(&self) -> Value {
+    fn document(&self) -> Value {
         self.ok();
         serde_json::from_slice(&self.stdout).unwrap_or_else(|e| {
             panic!(
@@ -376,6 +349,41 @@ impl Run {
                 self.command
             )
         })
+    }
+
+    /// Semantic commands expose a versioned result; raw preserves backend JSON.
+    fn json(&self) -> Value {
+        let mut document = self.document();
+        if self.raw {
+            return document;
+        }
+        assert!(
+            document["schema_version"] == 1,
+            "unexpected JSON schema version (payload withheld)"
+        );
+        assert!(
+            document["command"].is_string(),
+            "missing command label (payload withheld)"
+        );
+        assert!(
+            document.get("result").is_some(),
+            "missing semantic result (payload withheld)"
+        );
+        document["result"].take()
+    }
+
+    /// Inspect original backend data when comparing transport-level shapes.
+    fn backend(&self) -> Value {
+        let mut document = self.document();
+        assert!(
+            document["schema_version"] == 1,
+            "unexpected JSON schema version (payload withheld)"
+        );
+        assert!(
+            document.get("backend").is_some(),
+            "missing backend document (payload withheld)"
+        );
+        document["backend"].take()
     }
 
     /// stdout as text, for the human-rendering commands.
@@ -603,10 +611,9 @@ impl Drop for ScratchDir {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "real backend and credentials; requires ASKCODEX_LIVE=1"]
 fn live_auth_status_reports_claims_only_and_never_a_token() {
-    let Some(live) = live("live_auth_status_reports_claims_only_and_never_a_token") else {
-        return;
-    };
+    let live = live("live_auth_status_reports_claims_only_and_never_a_token");
 
     let run = live.run(&["--json", "auth", "status"]);
     let doc = run.json();
@@ -671,11 +678,9 @@ fn live_auth_status_reports_claims_only_and_never_a_token() {
 }
 
 #[test]
+#[ignore = "real backend and credentials; requires ASKCODEX_LIVE=1"]
 fn live_whoami_reports_a_plan_without_this_test_learning_who_you_are() {
-    let Some(live) = live("live_whoami_reports_a_plan_without_this_test_learning_who_you_are")
-    else {
-        return;
-    };
+    let live = live("live_whoami_reports_a_plan_without_this_test_learning_who_you_are");
 
     let doc = live.run(&["--json", "whoami"]).json();
     let what = "whoami --json";
@@ -694,10 +699,9 @@ fn live_whoami_reports_a_plan_without_this_test_learning_who_you_are() {
 }
 
 #[test]
+#[ignore = "real backend and credentials; requires ASKCODEX_LIVE=1"]
 fn live_usage_decodes_into_the_typed_model_and_its_windows_parse() {
-    let Some(live) = live("live_usage_decodes_into_the_typed_model_and_its_windows_parse") else {
-        return;
-    };
+    let live = live("live_usage_decodes_into_the_typed_model_and_its_windows_parse");
 
     let doc = live.run(&["--json", "usage"]).json();
     let what = "usage --json";
@@ -755,18 +759,15 @@ fn live_usage_decodes_into_the_typed_model_and_its_windows_parse() {
 }
 
 #[test]
+#[ignore = "real backend and credentials; requires ASKCODEX_LIVE=1"]
 fn live_models_lists_slugs_and_decodes_into_the_typed_catalog() {
-    let Some(live) = live("live_models_lists_slugs_and_decodes_into_the_typed_catalog") else {
-        return;
-    };
+    let live = live("live_models_lists_slugs_and_decodes_into_the_typed_catalog");
 
     let doc = live.run(&["--json", "models"]).json();
     let what = "models --json";
 
     assert_no_credentials(&doc, what);
-    // `--json` prints the catalog ENVELOPE the backend sent
-    // (`{"models": [...]}`), not a bare array: askcodex does not slice a
-    // document open and discard the sibling keys it does not model.
+    // The semantic catalog result retains the models array.
     let models = doc
         .get("models")
         .and_then(|value| value.as_array())
@@ -824,12 +825,9 @@ fn live_models_lists_slugs_and_decodes_into_the_typed_catalog() {
 }
 
 #[test]
+#[ignore = "real backend and credentials; requires ASKCODEX_LIVE=1"]
 fn live_raw_get_codex_usage_reaches_the_same_endpoint_as_the_usage_command() {
-    let Some(live) =
-        live("live_raw_get_codex_usage_reaches_the_same_endpoint_as_the_usage_command")
-    else {
-        return;
-    };
+    let live = live("live_raw_get_codex_usage_reaches_the_same_endpoint_as_the_usage_command");
 
     let raw = live.run(&["--json", "raw", "GET", "/codex/usage"]).json();
     let what = "raw GET /codex/usage";
@@ -843,7 +841,7 @@ fn live_raw_get_codex_usage_reaches_the_same_endpoint_as_the_usage_command() {
     // Same endpoint, same document shape. Only the KEY SET is compared:
     // the values (percentages, reset counters) move between two calls, and
     // asserting them would produce a flake, not a finding.
-    let via_command = live.run(&["--json", "usage"]).json();
+    let via_command = live.run(&["--json", "usage"]).backend();
     let command_object = via_command
         .as_object()
         .unwrap_or_else(|| panic!("usage --json: expected a JSON object"));
@@ -859,10 +857,9 @@ fn live_raw_get_codex_usage_reaches_the_same_endpoint_as_the_usage_command() {
 }
 
 #[test]
+#[ignore = "real backend and credentials; requires ASKCODEX_LIVE=1"]
 fn live_read_only_suite_never_mutates_auth_json() {
-    let Some(live) = live("live_read_only_suite_never_mutates_auth_json") else {
-        return;
-    };
+    let live = live("live_read_only_suite_never_mutates_auth_json");
 
     // Metadata only. The file's CONTENT is never read by this suite.
     let path = config::auth_path().expect("resolve the auth file path");
@@ -909,11 +906,9 @@ fn auth_fingerprint(path: &Path) -> (u64, std::time::SystemTime) {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "real backend and credentials; requires ASKCODEX_LIVE=1 ASKCODEX_LIVE_QUOTA=1; spends quota"]
 fn live_quota_image_create_writes_exactly_one_locked_size_png() {
-    let Some(live) = live_quota("live_quota_image_create_writes_exactly_one_locked_size_png")
-    else {
-        return;
-    };
+    let live = live_quota("live_quota_image_create_writes_exactly_one_locked_size_png");
 
     let dir = ScratchDir::new("image-create");
     let out = dir.join("created.png");
@@ -952,12 +947,9 @@ fn live_quota_image_create_writes_exactly_one_locked_size_png() {
 }
 
 #[test]
+#[ignore = "real backend and credentials; requires ASKCODEX_LIVE=1 ASKCODEX_LIVE_QUOTA=1; spends quota"]
 fn live_quota_image_edit_returns_one_locked_size_png_from_a_reference() {
-    let Some(live) =
-        live_quota("live_quota_image_edit_returns_one_locked_size_png_from_a_reference")
-    else {
-        return;
-    };
+    let live = live_quota("live_quota_image_edit_returns_one_locked_size_png_from_a_reference");
 
     let dir = ScratchDir::new("image-edit");
     let reference = match std::env::var_os(REF_IMAGE_VAR) {
@@ -1053,10 +1045,9 @@ fn assert_locked_png(path: &Path, doc: &Value, what: &str) {
 }
 
 #[test]
+#[ignore = "real backend and credentials; requires ASKCODEX_LIVE=1 ASKCODEX_LIVE_QUOTA=1; spends quota"]
 fn live_quota_ask_streams_a_completed_answer() {
-    let Some(live) = live_quota("live_quota_ask_streams_a_completed_answer") else {
-        return;
-    };
+    let live = live_quota("live_quota_ask_streams_a_completed_answer");
 
     // Default model on purpose: asserting a specific slug would encode a
     // catalog that changes. What is asserted is that askcodex reports the model

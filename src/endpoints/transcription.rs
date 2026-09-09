@@ -1,7 +1,5 @@
 //! WAV transcription over the subscription backend's multipart /transcribe route.
 use std::fmt;
-use std::fs::File;
-use std::io::Read;
 use std::path::Path;
 
 use serde_json::Value;
@@ -9,7 +7,7 @@ use serde_json::Value;
 use crate::{config, error::Error, http::Client};
 
 /// Client-side memory bound, not a claimed server upload limit.
-const MAX_AUDIO_BYTES: u64 = 25 * 1024 * 1024;
+const MAX_AUDIO_BYTES: u64 = crate::input::MAX_MEDIA_BYTES;
 
 pub struct Upload {
     bytes: Vec<u8>,
@@ -27,18 +25,7 @@ impl fmt::Debug for Upload {
 impl Upload {
     /// Resolve and validate the file before any authentication refresh or upload.
     pub fn read(path: &Path) -> Result<Self, Error> {
-        let mut audio = Vec::new();
-        File::open(path)
-            .map_err(|source| Error::AudioFileUnreadable {
-                path: path.into(),
-                source,
-            })?
-            .take(MAX_AUDIO_BYTES + 1)
-            .read_to_end(&mut audio)
-            .map_err(|source| Error::AudioFileUnreadable {
-                path: path.into(),
-                source,
-            })?;
+        let audio = crate::input::read_file(path, MAX_AUDIO_BYTES, "audio")?;
         Self::from_wav(&audio)
     }
 

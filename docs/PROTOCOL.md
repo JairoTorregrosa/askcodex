@@ -2,14 +2,22 @@
 
 Reverse-engineered protocol for the OpenAI **Codex ChatGPT-subscription** backend, as driven by the
 `askcodex` CLI. No API key is used or accepted — the only credential source is the subscription tokens in
-`~/.codex/auth.json` (`OPENAI_API_KEY` is **not used**; see auth schema below).
+`${CODEX_HOME:-~/.codex}/auth.json` (`OPENAI_API_KEY` is **not used**; see auth schema below).
+
+Backend observations retain their original dates. They are not evidence of a
+new live validation during the refactor. CLI machine envelopes and events are
+defined separately in [OUTPUT.md](OUTPUT.md); this document describes backend
+wire payloads.
 
 Every fact carries a provenance tag:
 - `[verified-live 2026-08-07]` — confirmed by a real authenticated call on that date. The raw
   transcripts are **not** included in this repository: they contain live credentials, account ids and
-  an email address. What is committed is the sanitized capture of each shape, in
-  [`samples/`](samples) — `usage.json`, `models.json`, `whoami-fields.json`, `responses-sse.txt`,
-  `image-response-meta.json`. Where a live fact has no committed artifact, this document says so
+  an email address. Redacted shapes and adapted fixtures live in
+  [`samples/`](samples) — `usage.json`, `models.json`, `whoami-fields.json`,
+  `responses-sse.txt`, and `image-response-meta.json`. The original redacted SSE
+  capture is preserved separately in [`captures/`](captures/README.md); its
+  synthetic sentinel adaptation is explicitly identified in §4. Where a live
+  fact has no committed artifact, this document says so
   instead of pointing at something you cannot open.
 - `[verified-source <permalink>]` — confirmed against `openai/codex` source, commit-pinned to
   `2e3a1702c2e7adea5f2ae9ea2799c625024b4fda` (repo HEAD on 2026-08-07). A citation abbreviated as
@@ -91,17 +99,12 @@ unparseable string.
 `askcodex raw` is the reason this rule has to be enforced rather than assumed: it is the one command that
 takes a destination from the command line. It accepts exactly two shapes — a path beginning with `/`,
 which hangs off `config::BASE_URL`, or an absolute `http(s)` URL already on that origin — and refuses
-anything else. The refusal happens **twice**:
-
-1. in clap's `value_parser` for `raw <path>`, so the reason is printed at parse time, before the
-   credential file is even opened; and
-2. again inside `Client::send_once`, on the resolved URL, as the first statement of the function —
-   before the access token is read out of the loaded credentials, at the single point where the
-   `Authorization` header is built. Nothing routes around it: `request_json` and `request_stream`
-   both call `send_once`, so `raw`, the endpoint modules and the SSE path all pass through the same
-   gate.
-
-The first layer is a courtesy. The second is the invariant.
+anything else. Clap validates the raw argument before credentials are opened.
+The private `http/target::Target` constructor resolves the destination and
+enforces origin policy again before the sender can attach credentials.
+`Client::send_once` accepts this checked type, not an unchecked URL string;
+JSON, multipart and stream requests share that sender. The origin policy is
+therefore enforced by the transport interface as well as argument validation.
 
 Three consequences worth stating explicitly:
 
@@ -122,12 +125,11 @@ Three consequences worth stating explicitly:
   reachable only from this crate's own offline tests, never from the environment, a config file, or
   argv.
 
-There is exactly one widening of the origin check, and it is disclosed here rather than left to be
-discovered: `origin_permitted` takes an `allow_loopback` flag whose only true caller is
-`cfg!(test)` inside `Client::send_once`, where this crate's own unit tests point the "backend" at an
-httpmock server on 127.0.0.1. It is a compile-time switch, not a runtime one — the shipped binary and
-the integration tests compile `http.rs` without `cfg(test)`, so no build a user can run is affected,
-and the refusal is separately tested by calling `origin_permitted` with the production setting.
+Loopback injection is compiled only for offline unit tests: `Target::resolve`
+passes `cfg!(test)` to `origin_permitted`. Production builds and integration-test
+binaries use the fixed origin. Test-only transport constructors are absent
+from the public production interface; tests separately exercise rejection with
+the production origin policy.
 
 The refresh token and the bearer token thus have one destination each, and neither is settable from
 outside the binary: `config::TOKEN_URL` for the refresh, the `config::BASE_URL` origin for everything
@@ -139,7 +141,7 @@ else.
 
 ### 3.1 `GET /codex/usage` — plan + rate limits
 `[verified-live 2026-08-07]`; sanitized body in [`samples/usage.json`](samples/usage.json), which is
-also the fixture `src/run.rs` and `src/endpoints/account.rs` decode in their tests.
+also the fixture `src/run/tests.rs` and `src/endpoints/account.rs` decode in their tests.
 
 Response (observed keys):
 ```jsonc
@@ -222,6 +224,11 @@ Request body:
 **≤5 reference images** `[verified-source .../codex-rs/ext/image-generation/src/tool.rs#L58]`
 `const MAX_EDIT_IMAGES: usize = 5;` — the CLI enforces this client-side.
 
+The current client separately caps combined reference bytes at 25 MiB. This is
+a local memory policy, not a verified backend maximum. References are prepared
+before authentication and must be regular files (symlinks to regular files
+are supported); devices and FIFOs are rejected before reading.
+
 **Reference images must be PNG.** Look at the data URL above: askcodex labels every reference
 `image/png` on the wire, unconditionally. So it verifies that label locally before sending. Each
 `-i/--inputs` file is read and its first four bytes are compared against the PNG magic `89 50 4E 47`
@@ -301,7 +308,8 @@ transport. Local evidence: `/tmp/askcodex/transcribe-20260908/` (`probe-curl.jso
 
 `text` is parsed as an optional string and required for a usable result;
 missing/null/wrong-type values fail. A present empty string is preserved.
-`--json` returns the complete response object, retaining unknown fields.
+CLI `--json` places the transcript at `.result.text` and preserves the complete
+response object, including unknown fields, at `.backend`; see [OUTPUT.md](OUTPUT.md).
 WAV is the only format exercised here. The 25 MiB cap is imposed locally
 to bound memory, not claimed as the server's maximum. Timestamps, language
 selection, speaker labels, other formats, duration limits, and model identity
@@ -312,10 +320,12 @@ offline mocks, not by rotating the user's real credentials.
 
 `[verified-live 2026-08-07]` — framing was observed in a real stream. The fixture in
 [`samples/responses-sse.txt`](samples/responses-sse.txt) is adapted from that capture:
-identifiers are redacted, and the original `CS`/`UB` deltas and `CSUB-VERIFY-OK`
+its original redacted source is [`captures/responses-sse-2026-08-07.txt`](captures/responses-sse-2026-08-07.txt),
+restored from the historical Git blob documented in [capture provenance](captures/README.md).
+This is not a new backend observation. Identifiers are redacted, and the original `CS`/`UB` deltas and `CSUB-VERIFY-OK`
 text fields were changed to `ASK`/`CODEX` and `ASKCODEX-VERIFY-OK`. These text
 values are synthetic; the other event metadata remains from the capture. That
-file is also the fixture `src/endpoints/responses.rs` and `src/run.rs` parse in their tests, so this
+file is also the fixture `src/endpoints/responses.rs` and `src/run/tests.rs` parse in their tests, so this
 contract and the parser cannot drift apart silently. The capture stops on the terminal
 `event: response.completed` line, before that frame's `data:` line, which is why it doubles as the
 truncated-stream fixture. The `response.completed` frame in the example block below is therefore
@@ -347,13 +357,16 @@ response.completed               (terminal — stop here)
 ```
 
 Parser rules (spec for implementers):
-- Accumulate `delta` from every `response.output_text.delta`.
+- Accumulate `delta` from every `response.output_text.delta`. The local sink is
+  fallible: a downstream write failure immediately stops reading and does not
+  produce a final success result. Semantic NDJSON events use the separate
+  [CLI output contract](OUTPUT.md), not the backend SSE framing.
 - **Terminate** on `response.completed`. Its payload carries `response.usage` with token counts
   (`input_tokens`, `output_tokens`, `total_tokens`, plus `*_details` objects)
-  `[verified-live 2026-08-20]`; askcodex passes the object through raw in `ask --json` and treats a
+  `[verified-live 2026-08-20]`; askcodex preserves the object at `.result.usage` in `ask --json` and treats a
   missing or `null` field as absent.
 - **Raise loudly** (non-zero exit) on `response.failed`, `response.error`, or a top-level `error`
-  event — include the raw event JSON in the error. `[verified-source: event names match codex + OpenAI
+  event — include a bounded event snippet in the error. `[verified-source: event names match codex + OpenAI
   Responses API]` `[UNVERIFIED-live: failure events never provoked against the live backend;
   names carried forward from the API contract]`.
 - Ignore unrecognized event types (forward-compat).
@@ -438,9 +451,19 @@ flow is exercised sparingly: it was executed deliberately, with a backup taken f
   `const TOKEN_REFRESH_INTERVAL: i64 = 8;` (days) and
   `const CHATGPT_ACCESS_TOKEN_REFRESH_WINDOW_MINUTES: i64 = 5;`. askcodex mirrors both:
   `config::REFRESH_WINDOW_SECS = 300` and `config::REFRESH_MAX_AGE_DAYS = 8`.
-- **Persistence requirements** (for `askcodex`'s `auth.rs`): write `tokens.{access_token,id_token,
+  The client policy treats expiry within that window or an old last_refresh as
+  reasons to renew; malformed JWT expiry is an error rather than a fallback.
+  This client policy is distinct from the upstream behavior quoted above.
+- **Persistence requirements** (implemented by private `auth/store` adapters): write `tokens.{access_token,id_token,
   refresh_token}` + `last_refresh` back to `auth.json` **atomically**, **mode 0600**, preserving every
-  other key; never discard a working refresh token on a failed refresh; back up before writing.
+  other key; never discard stored tokens on a failed renewal; back up before writing.
+  `Secret`, `AuthFile` and `AuthTokens` have no generic serialization interface.
+  A kernel-held lock in `auth/lock` spans reread, renewal and persistence; the
+  lock inode remains in place and process exit releases ownership. It coordinates
+  cooperating current askcodex clients, not Codex or older unlink-based clients.
+  A failure after remote rotation may leave a backup with an invalid refresh
+  token; directory-entry durability across power loss is not guaranteed. These
+  are local implementation constraints, not upstream wire facts. See [DESIGN.md](../DESIGN.md).
 - **Failure classification** `[verified-source .../codex-rs/login/src/auth/manager.rs#L186-L191, L1548-L1571]`:
   distinct permanent errors for `refresh_token_expired` / `_reused` / `_invalidated` / revoked →
   "log out and sign in again". A `askcodex` refresh that gets one of these must fail loudly, not silently

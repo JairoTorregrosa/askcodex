@@ -42,8 +42,6 @@ import agm_gate  # noqa: E402  (needs the sys.path line above)
 
 GATE = Path(agm_gate.__file__).resolve()
 MANIFEST = agm_gate.load_manifest()
-CHECKBOX = MANIFEST["sections"]["confirmation"]["checkbox"]
-UNCHECKED = CHECKBOX.replace("[x]", "[ ]", 1)
 
 # --- fabricated fixtures ---------------------------------------------------
 # Shapes only. Nothing here is, or resembles, a real credential.
@@ -73,22 +71,17 @@ TEMPLATE_PHRASES = [
 ]
 
 
-def body_for(zone, *, omit=(), declared=None, confirmed=True, extra=""):
+def body_for(zone, *, omit=(), declared=None, extra=""):
     """A pull-request body that satisfies `zone`, built from the manifest.
 
     `omit` drops sections by key; `declared` overrides the declared zone;
-    `confirmed` leaves the human box unchecked when False.
     """
     parts = [f"Risk zone: {zone if declared is None else declared}", ""]
     for key in MANIFEST["evidence"][zone]:
         if key in omit:
             continue
         spec = MANIFEST["sections"][key]
-        if key == "confirmation":
-            parts += ["## Human confirmation", ""]
-            parts += [CHECKBOX if confirmed else UNCHECKED, ""]
-        else:
-            parts += [spec["heading"], "", f"Fabricated evidence for {key}.", ""]
+        parts += [spec["heading"], "", f"Fabricated evidence for {key}.", ""]
     if extra:
         parts += [extra, ""]
     return "\n".join(parts)
@@ -161,6 +154,10 @@ class ZoneComputationTests(unittest.TestCase):
         # low (`*`). Every file matches at least two, because `*` is the low
         # zone's pattern.
         self.assertEqual(self.zone("src/auth.rs"), "critical")
+        self.assertEqual(self.zone("src/auth/store.rs"), "critical")
+        self.assertEqual(self.zone("src/auth/session.rs"), "critical")
+        self.assertEqual(self.zone("src/auth/lock.rs"), "critical")
+        self.assertEqual(self.zone("src/http/target.rs"), "high")
         # src/main.rs matches high, medium and low.
         self.assertEqual(self.zone("src/main.rs"), "high")
 
@@ -206,10 +203,7 @@ class RequiredSectionTests(unittest.TestCase):
                 with self.subTest(zone=zone, section=key):
                     failures = self.failures(body_for(zone, omit=(key,)), zone)
                     self.assertEqual(len(failures), 1, failures)
-                    needle = (
-                        "confirmation" if key == "confirmation"
-                        else MANIFEST["sections"][key]["heading"]
-                    )
+                    needle = MANIFEST["sections"][key]["heading"]
                     self.assertIn(needle.lower(), failures[0].lower())
 
     def test_a_lower_zones_package_does_not_satisfy_a_higher_one(self):
@@ -233,35 +227,41 @@ class RequiredSectionTests(unittest.TestCase):
         self.assertEqual(self.failures(body_for("high", declared="HIGH"), "high"), [])
 
 
-class HumanConfirmationTests(unittest.TestCase):
-    """The one gate an agent must never be able to satisfy."""
+class MergeAuthorizationTests(unittest.TestCase):
+    """Evidence checks never impersonate human review or authenticate prose."""
 
-    def test_unchecked_box_fails_critical(self):
-        failures = agm_gate.evidence_failures(
-            MANIFEST, body_for("critical", confirmed=False), "critical"
-        )
-        self.assertEqual(len(failures), 1, failures)
-        self.assertIn("only a human may check it", failures[0])
-
-    def test_checked_box_passes_critical(self):
+    def test_critical_evidence_needs_no_human_identity_claim(self):
+        body = body_for("critical")
+        self.assertNotIn("I am a human", body)
+        self.assertNotIn("[x]", body)
         self.assertEqual(
-            agm_gate.evidence_failures(MANIFEST, body_for("critical"), "critical"), []
+            agm_gate.evidence_failures(MANIFEST, body, "critical"), []
         )
 
-    def test_the_box_is_matched_literally(self):
-        # A paraphrase is not the box. The gate matches agm.json's exact
-        # string, which .github/PULL_REQUEST_TEMPLATE.md supplies verbatim.
-        body = body_for("critical", confirmed=False).replace(
-            UNCHECKED, "- [x] I am a human and I take responsibility."
+    def test_human_checkbox_cannot_replace_authorization_evidence(self):
+        body = body_for(
+            "critical", omit=("authorization",),
+            extra="- [x] I am a human. I approve this change."
         )
         failures = agm_gate.evidence_failures(MANIFEST, body, "critical")
         self.assertEqual(len(failures), 1, failures)
-        self.assertIn("Human confirmation box", failures[0])
+        self.assertIn("## Merge authorization", failures[0])
 
-    def test_confirmation_is_only_required_where_agm_json_says(self):
-        self.assertNotIn("confirmation", MANIFEST["evidence"]["medium"])
-        self.assertNotIn("confirmation", MANIFEST["evidence"]["high"])
-        self.assertIn("confirmation", MANIFEST["evidence"]["critical"])
+    def test_critical_keeps_independent_review_and_authorization_evidence(self):
+        self.assertIn("second_review", MANIFEST["evidence"]["critical"])
+        self.assertIn("authorization", MANIFEST["evidence"]["critical"])
+        self.assertNotIn("confirmation", MANIFEST["sections"])
+
+    def test_template_and_manifest_use_the_same_evidence_headings(self):
+        template = (GATE.parents[2] / ".github/PULL_REQUEST_TEMPLATE.md").read_text()
+        for key in MANIFEST["evidence"]["critical"]:
+            self.assertIn(MANIFEST["sections"][key]["heading"], template)
+        self.assertNotIn("I am a human", template)
+
+    def test_summary_does_not_claim_review_or_authorization(self):
+        result = run_gate(body=body_for("critical"), changed_files="src/auth.rs")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("does not authenticate authorization or certify human review", result.stdout)
 
 
 class RedactionCatchTests(unittest.TestCase):
@@ -641,7 +641,7 @@ class ExitCodeTests(unittest.TestCase):
     def test_zero_when_every_gate_passes(self):
         result = run_gate(body=body_for("critical"), changed_files="install.sh\n")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("All mechanical gates pass", result.stdout)
+        self.assertIn("All mechanical evidence gates pass", result.stdout)
 
     def test_zone_low_needs_no_evidence_package(self):
         result = run_gate(body="", changed_files="README.md\n")

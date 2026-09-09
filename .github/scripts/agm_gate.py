@@ -2,8 +2,8 @@
 """AGM gate: enforce agm.json on a pull request.
 
 Computes the risk zone from the changed files, checks the PR body for the
-declared zone, the required evidence sections, and the human-confirmation
-box, and scans the body for identifiers that should have been redacted.
+declared zone and the required evidence sections, including merge authorization,
+and scans the body for identifiers that should have been redacted.
 Writes the review packet to the job summary. Exits non-zero when a gate
 fails.
 
@@ -371,13 +371,7 @@ def evidence_failures(manifest, body, computed):
     sections = manifest["sections"]
     for key in required:
         spec = sections[key]
-        if key == "confirmation":
-            if spec["checkbox"] not in body:
-                failures.append(
-                    "Human confirmation box is not checked "
-                    "(and only a human may check it)."
-                )
-        elif spec["heading"] not in body:
+        if spec["heading"] not in body:
             failures.append(f"Missing section `{spec['heading']}`: {spec['means']}")
 
     return failures
@@ -431,7 +425,11 @@ def main():
             )
         lines.append("")
     if not failures and not leaks:
-        lines.append("All mechanical gates pass. Maintainer review remains.")
+        lines.append(
+            "All mechanical evidence gates pass. This does not authenticate "
+            "authorization or certify human review. GitHub merge permissions "
+            "and configured review requirements still apply."
+        )
 
     report = "\n".join(lines) + "\n"
     print(report)

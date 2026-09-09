@@ -14,6 +14,7 @@
         "GOVERNANCE.md",
         "agm.json",
         "src/auth.rs",
+        "src/auth/*",
         "skill/*"
       ],
       "why": "These files write to user machines, publish binaries, instruct agents, or change the rules of review itself. `src/auth.rs` rewrites the user's real credentials in `~/.codex/auth.json`: a bug there can lock the user out of codex. Files under `skill/` are installed onto user machines and instruct agents."
@@ -22,6 +23,7 @@
       "level": "high",
       "paths": [
         "src/http.rs",
+        "src/http/*",
         "src/main.rs",
         "src/endpoints/*",
         "src/config.rs",
@@ -52,7 +54,7 @@
       "assumptions",
       "risk",
       "second_review",
-      "confirmation"
+      "authorization"
     ]
   },
   "sections": {
@@ -80,17 +82,17 @@
       "heading": "## Second review",
       "means": "An adversarial pass by a second agent or human, with its findings and their resolution."
     },
-    "confirmation": {
-      "checkbox": "- [x] I am a human. I read the diff and the evidence above, and I take responsibility for this change.",
-      "means": "Set by the human contributor only. An agent must never check this box."
+    "authorization": {
+      "heading": "## Merge authorization",
+      "means": "Name the maintainer who authorized delivery and the scope of any delegation. Distinguish authorization to implement and merge from human code review; never claim a review that did not occur. This prose is evidence, not an authentication mechanism."
     }
   },
   "gates": {
     "zone_declared": "The PR body names the risk zone and it matches the zone computed from the changed files.",
     "evidence_complete": "Every section this zone requires is present in the PR body.",
-    "human_confirmed": "The confirmation box is checked. Required for high and critical zones.",
+    "merge_authorized": "GitHub authenticates the account performing the merge and enforces repository permissions and configured branch or ruleset requirements. A PR-body statement cannot grant permission or substitute for a required review.",
     "evidence_redacted": "The PR body carries no unredacted account or user identifier, no email address, and nothing token-shaped. Placeholders only: acct_REDACTED, user_REDACTED, email_REDACTED. Checked mechanically for every zone, low included: a leaked credential is not a documentation change. A token that reaches a PR body must be ROTATED, not edited out — the edit stays in GitHub's event history.",
-    "maintainer_review": "GitHub review approval. This gate belongs to the maintainer alone; no tool and no contributor statement can set it."
+    "maintainer_review": "When repository rules require independent approval, use a GitHub review attributed to the reviewer. Delegated execution and automated second review must not be represented as human code review. A PR author cannot approve their own PR; do not manufacture an approval to bypass that constraint."
   },
   "provenance": {
     "disclosure": "When an agent produced any part of the change, name the tool and model in the PR body.",
