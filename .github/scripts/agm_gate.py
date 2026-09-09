@@ -365,6 +365,9 @@ def authorization_has_content(body, heading):
     fence = None
     prose = []
     for line in body.splitlines():
+        # Indented Markdown examples cannot supply fields or change fence state.
+        if line.expandtabs(4).startswith("    "):
+            continue
         stripped = line.strip()
         marker = re.match(r"^(`{3,}|~{3,})", stripped)
         if marker:

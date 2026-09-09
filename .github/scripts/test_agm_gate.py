@@ -351,6 +351,13 @@ class AuthorizationContentTests(unittest.TestCase):
                         "## Notes\n" + valid]:
             self.assertEqual(len(self.failures_for(content)), 1)
 
+    def test_indented_code_cannot_supply_fields_or_fence_markers(self):
+        valid = "Authorization: granted\nMaintainer: @fixture-maintainer\nScope: implement and merge"
+        for indent in ["    ", "\t", " \t", "  \t"]:
+            example = "\n".join(indent + line for line in valid.splitlines())
+            self.assertEqual(len(self.failures_for(example)), 1)
+            self.assertEqual(self.failures_for(indent + "```\n" + valid), [])
+
 class RedactionCatchTests(unittest.TestCase):
     """The scan must catch a real leak — in any zone, inside a fence or not."""
 
