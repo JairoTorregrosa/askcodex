@@ -21,8 +21,10 @@ the user the useful output with its saved path.
 
 - This skill describes askcodex 0.2.0 or later. Check `askcodex --version` once per session: 0.1.x
   hides the GPT-6 models, defaults `ask` to `gpt-5.6-sol`, and accepts an `ultra` effort the
-  backend rejects. If it is older, tell the user to update (`git pull && ./install.sh` in their
-  askcodex checkout) instead of working around it.
+  backend rejects. If it is older, tell the user to update instead of working around it: in an
+  askcodex checkout, `git pull && ./install.sh`; without one, clone
+  https://github.com/JairoTorregrosa/askcodex and run `./install.sh` (needs Rust 1.88+), or
+  download a release binary of 0.2.0 or later if one is published.
 - Every call is one-shot and stateless. `ask` sends only the prompt and optional `--instructions`:
   the model gets no tools, files, browsing, repository, or earlier conversation. A file path in a
   prompt is just text; paste the contents instead.
