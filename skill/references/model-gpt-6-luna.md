@@ -50,18 +50,33 @@ You are about to send one request to `gpt-6-luna` with `askcodex ask`. Luna is t
    mkdir -p /tmp/askcodex
    cat > /tmp/askcodex/luna-brief.txt <<'EOF'
    Convert each support ticket below to one JSON object per line with exactly these
-   keys in this order: "id" (string), "product" (one of "app", "api", "billing"),
-   "severity" (integer 1-3, 1 = outage), "summary" (at most 12 words).
-   Use null when a value is not stated. Output only the JSON lines: no code fence,
-   no prose, no blank lines.
+   keys in this order: "id" (string), "product" (one of "app", "api", "billing", or
+   null), "severity" (integer 1-3, 1 = outage, or null), "summary" (at most 12 words).
+   Copy each ticket's id exactly as given, in input order. Use null for product or
+   severity when the ticket does not state it; never guess.
+   Output only the JSON lines: no code fence, no prose, no blank lines.
    Example: {"id":"T-17","product":"api","severity":2,"summary":"Webhook retries stop after first failure"}
 
-   Tickets:
+   Tickets (each starts with its id, e.g. "T-17:"):
    [paste tickets]
    EOF
    askcodex ask - --model gpt-6-luna --effort low --json < /tmp/askcodex/luna-brief.txt > /tmp/askcodex/luna-tickets.json
-   jq -r .result.text /tmp/askcodex/luna-tickets.json | jq -c .   # fails on any invalid line
+   jq -j .result.text /tmp/askcodex/luna-tickets.json > /tmp/askcodex/luna-tickets.jsonl   # -j adds no newline
+   IDS='["T-17","T-18","T-19"]'   # the ids of the tickets you pasted, in order
+   jq -Rse --argjson ids "$IDS" 'rtrimstr("\n") | split("\n")
+     | map(try fromjson catch null | .id?) == $ids and all(.[];
+     (try fromjson catch null) as $o | ($o | type) == "object" and ($o |
+       keys_unsorted == ["id","product","severity","summary"]
+       and (.id | type == "string" and length > 0)
+       and (.product == null or (.product | IN("app","api","billing")))
+       and (.severity == null or (.severity | IN(1,2,3)))
+       and (.summary | type == "string" and (split(" ") | map(select(length > 0)) | length) <= 12)))' \
+     /tmp/askcodex/luna-tickets.jsonl
    ```
+   Accept the output only when the last command prints `true`: exactly one JSON object per
+   physical line, one line per pasted ticket with its id in order, every constraint met. `false`
+   means a missing, extra, blank, pretty-printed or merged line, an invented or reordered id, or a
+   broken constraint. Paste only tickets that carry an id; ask the user for missing ids first.
 4. Check the answer for these failure modes before you use it: lines that do not parse or break the schema; fields, merges, or behaviors you did not ask for; guessed values where the source is silent and you asked for null.
 
 ## Rules
