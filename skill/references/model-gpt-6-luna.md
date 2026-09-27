@@ -60,7 +60,7 @@ You are about to send one request to `gpt-6-luna` with `askcodex ask`. Luna is t
    [paste tickets]
    EOF
    askcodex ask - --model gpt-6-luna --effort low --json < /tmp/askcodex/luna-brief.txt > /tmp/askcodex/luna-tickets.json
-   jq -r .result.text /tmp/askcodex/luna-tickets.json > /tmp/askcodex/luna-tickets.jsonl
+   jq -j .result.text /tmp/askcodex/luna-tickets.json > /tmp/askcodex/luna-tickets.jsonl   # -j adds no newline
    N=3   # the number of tickets you pasted
    jq -Rse --argjson n "$N" 'rtrimstr("\n") | split("\n") | length == $n and all(.[];
      (try fromjson catch null) as $o | ($o | type) == "object" and ($o |
