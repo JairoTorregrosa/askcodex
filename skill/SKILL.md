@@ -23,9 +23,10 @@ the user the useful output with its saved path.
   the model gets no tools, files, browsing, repository, or earlier conversation. A file path in a
   prompt is just text; paste the contents instead.
 - Everything in a prompt, a reference image or an audio file leaves the machine for OpenAI's
-  backend. Before you paste logs, exports, code or documents, remove credentials, tokens, and
-  personal or customer data the task does not need. If the task needs sensitive material, or you
-  cannot tell, ask the user first.
+  backend. Before you paste logs, exports, code or documents, always remove credentials, tokens,
+  keys and passwords, even when the user supplied them for the task: replace them with
+  placeholders. Also remove personal or customer data the task does not need; if the task needs
+  it, or you cannot tell, ask the user first.
 - Every call spends the user's subscription quota. GPT-6 Astra is the most expensive model.
 - A second model's answer is input to your work. Verify its facts, review its code, and look at
   its images before you report success.

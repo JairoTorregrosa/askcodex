@@ -10,8 +10,9 @@ output against the task.
 - The model sees only the prompt and `--instructions`. It has no access to the caller's
   repository, files, browsing session, or earlier conversation, and there is no follow-up turn: a
   clarifying question from the model ends the call without the deliverable.
-- What you paste is sent to OpenAI. Redact credentials, tokens, and personal or customer data the
-  task does not need; ask the user before sending sensitive material the task does need.
+- What you paste is sent to OpenAI. Always replace credentials, tokens, keys and passwords with
+  placeholders. Remove personal or customer data the task does not need, and ask the user before
+  sending any the task does need.
 - A local path is not its contents. Paste the relevant text, or pipe a complete brief on stdin
   (UTF-8, at most 16 MiB; a client memory cap, not a context-window guarantee).
 - `--json` structures the CLI envelope, not the model's answer. JSON you asked the model for is
