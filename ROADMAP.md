@@ -2,11 +2,14 @@
 
 ## Periodic re-verification of the image path
 
-The subscription image endpoints ignore `size`, `quality`, `background`,
-`output_format`, `n`, and `model`, and return exactly one opaque PNG at a
-size the server chooses. That was proven with real calls, and it is the
+The subscription image endpoints ignore `model` and, as of the 2026-08-07
+probes, `size`, `quality`, `output_format` and `n`, and return exactly one PNG
+at a size the server chooses. That was proven with real calls, and it is the
 reason askcodex exposes only a prompt, reference images, and an output path:
 accepting a knob the server drops would be a default that masks failure.
+`background: "transparent"` is honored since at least 2026-09-27 (one call);
+a `--transparent` flag is the first candidate under rule 2 below, once more
+than one call backs it (docs/PROTOCOL.md §5).
 
 This is a server-side fact, not a contract. Candidate work:
 

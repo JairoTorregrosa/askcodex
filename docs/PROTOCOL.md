@@ -32,7 +32,9 @@ follow. Every fact resting on it alone is tagged `[UNVERIFIED]` where it appears
 in §9, each time saying what — if anything — askcodex actually does with it.
 
 Source cross-check used the installed codex line `0.147.x`; the pinned commit is repo HEAD, which is
-newer — noted where a path may have drifted.
+newer — noted where a path may have drifted. The 2026-09-27 re-check (model catalog, effort
+validation, image model) read `openai/codex` at tag `rust-v0.157.1`, the latest stable release on that
+date; those citations say so explicitly.
 
 ---
 
@@ -78,7 +80,9 @@ literal header key `"originator"` = `originator().header_value`, plus `USER_AGEN
 ```
 e.g. `codex_cli_rs/0.147.0 (Macintosh 26.0.0; arm64) <terminal-ua>`.
 The backend does not validate the exact UA — any codex-style string works `[verified-live 2026-08-07]`
-(askcodex sends `config::USER_AGENT`, currently `codex_cli_rs/0.147.0 (askcodex)`, and gets 200s). The CLI
+(askcodex sends `config::USER_AGENT`, currently `codex_cli_rs/0.157.1 (askcodex)`, and gets 200s;
+on 2026-09-27 the old `0.147.0` UA still reached `gpt-6-astra` through `/codex/responses`, so the UA
+does not gate model access — only the catalog's `client_version` filter does, §3.3). The CLI
 sends a codex-style UA built from its own version; it must **not** claim to be a browser.
 
 **Auth negative control:** unauthenticated `POST …/responses` → **401**; with the headers above,
@@ -174,8 +178,10 @@ dumped, and no raw /me artifact exists in this repository; low risk, /me is a we
 profile endpoint]`.
 
 ### 3.3 `GET /codex/models?client_version=<v>` — model catalog
-`[verified-live 2026-08-07]`; sanitized in [`samples/models.json`](samples/models.json). The `client_version`
-query param is required (askcodex defaults it to `0.147.0`). Response: `{ "models": [ … ] }`;
+`[verified-live 2026-08-07, 2026-09-27]`; the 2026-08-07 document is sanitized in
+[`samples/models.json`](samples/models.json) and kept as the decoding fixture. The `client_version`
+query param is required (askcodex defaults it to `config::CLIENT_VERSION`, `0.157.1` since
+2026-09-27). Response: `{ "models": [ … ] }`;
 each model object has ~50 fields — the semantically relevant ones:
 `slug`, `display_name`, `visibility` (`list`|`hide`), `input_modalities` (`["text","image"]` for all 8),
 `context_window` (272000), `default_reasoning_level`, `supported_reasoning_levels[].effort`,
@@ -196,6 +202,36 @@ Live catalog (8 models):
 
 (These are the coding/agent models; image generation is a *tool* layered on them, not a listed model.)
 
+**The backend filters the catalog by `client_version`.** `[verified-live 2026-09-27]` Each model
+carries `minimal_client_version`; a model newer than the requested `client_version` is omitted, not
+flagged. With `client_version=0.147.0` the catalog had 7 models and no `gpt-6-*`; with `0.157.1` it
+had 10. The gpt-6 minimums are `0.153.0` (astra) and `0.155.0` (sol, luna). A stale default therefore
+hides new models silently, which is why `config::CLIENT_VERSION` tracks the latest stable Codex
+release. `/codex/responses` does not apply this filter: `gpt-6-astra` answered with the `0.147.0` UA.
+
+Live catalog on 2026-09-27 (`client_version=0.157.1`, 10 models; efforts as the catalog lists them):
+
+| slug | visibility | reasoning efforts | default | minimal_client_version | notes |
+|---|---|---|---|---|---|
+| gpt-6-astra | list | low→ultra | medium | 0.153.0 | "Frontier intelligence for the most demanding work." |
+| gpt-6-sol | list | low→ultra | low | 0.155.0 | "Workhorse model for coding and everyday work." |
+| gpt-6-luna | list | low→max | medium | 0.155.0 | "Fast and affordable model for easier tasks." |
+| gpt-reserve | hide | low→max | medium | 0.144.0 | |
+| gpt-5.6-sol | list | low→ultra | low | 0.144.0 | now described as "Older coding model for complex work." |
+| gpt-5.6-terra | list | low→ultra | medium | 0.144.0 | |
+| gpt-5.6-luna | list | low→max | medium | 0.144.0 | |
+| gpt-daybreak-blue-latest | list | low→ultra | low | 0.144.0 | `model_specialty: "cyber"` |
+| gpt-5.5 | list | low→xhigh | medium | 0.124.0 | `upgrade`: retires 2026-10-14T19:00:00Z, replacement `gpt-5.6-sol` |
+| codex-auto-review | hide | low→max | medium | 0.98.0 | |
+
+All ten take text and image input and report `context_window` 272000; every model except `gpt-5.5`
+reports `max_context_window` 872000. `gpt-5.6-sol-wm`, `gpt-5.4` and `gpt-5.4-mini` are gone from
+both catalogs. `ultra` in `supported_reasoning_levels` is described as "Maximum reasoning with
+automatic task delegation": a Codex client-side multi-agent mode (`multi_agent_reasoning_effort`,
+`multi_agent_version` fields; `ReasoningEffort::Ultra` in
+`codex-rs/protocol/src/openai_models.rs` at `rust-v0.157.1`), not a value `/codex/responses` accepts
+(§3.7).
+
 ### 3.4 `POST /codex/images/generations` — text → image
 `[verified-live 2026-08-07]` (one real `askcodex image create`; the returned PNG is not committed, its
 envelope is summarized in [`samples/image-response-meta.json`](samples/image-response-meta.json)) ·
@@ -208,7 +244,9 @@ Request body the CLI sends (only these two fields matter):
 Source request type `ImageGenerationRequest { prompt, model, background?, quality?, size?, n? }`
 `[verified-source .../codex-rs/codex-api/src/images.rs#L5-L16]`. `model="gpt-image-2"` is hardcoded by
 the codex tool `[verified-source .../codex-rs/ext/image-generation/src/tool.rs#L57]`
-`const IMAGE_MODEL: &str = "gpt-image-2";`.
+`const IMAGE_MODEL: &str = "gpt-image-2";`. Unchanged at `rust-v0.157.1` (line 59), at
+`rust-v0.159.0-alpha.9` and on `main` as of 2026-09-27; nothing in `openai/codex` mentions the
+Images 2.5 API models (`gpt-image-2.5-flare`, `gpt-image-2.5-sunburst`) `[verified-source 2026-09-27]`.
 
 ### 3.5 `POST /codex/images/edits` — edit / reference-guided
 `[verified-live 2026-08-07]` (one real `askcodex image edit` with a single reference image) ·
@@ -253,20 +291,33 @@ not read either field, so nothing depends on that claim.
 
 ```jsonc
 { "created": <u64>,
-  "data": [ { "b64_json": "<raw base64 PNG, no data: prefix>" } ],
-  "background": "opaque", "quality": "low", "size": "1254x1254",
+  "data": [ { "b64_json": "<raw base64 PNG, no data: prefix>", "generation_id": "<id>" } ],
+  "background": "opaque", "quality": "low", "size": "1370x1148",
   "output_format": "png",
-  "usage": { "input_tokens": <int>, "output_tokens": <int>, "image_tokens": <int> } }
+  "usage": { "input_tokens": 22,
+             "input_tokens_details": { "image_tokens": 0, "text_tokens": 22 },
+             "output_tokens": 429,
+             "output_tokens_details": { "image_tokens": 429, "text_tokens": 0 },
+             "total_tokens": 451 } }
 ```
+(Values from the 2026-09-27 re-dump below; the RE report's top-level `image_tokens` was wrong.)
 `data[0].b64_json` decodes to a PNG (magic `89 50 4E 47`). See
 [`samples/image-response-meta.json`](samples/image-response-meta.json) (b64 replaced with a
 byte-count placeholder; its `_note` carries the same provenance split as this paragraph). The `size`
-value is server-chosen and varies between dates — `[verified-live 2026-08-07: "1254x1254";
-2026-08-20: "1402x1122"]` (returned in the envelope and printed by the CLI); see §5. The
-`created`/`background`/`quality`/`output_format`/`usage` field VALUES are
-`[UNVERIFIED: carried from the earlier RE report §3, which is not in this repository, so there is no
-artifact here to check them against. askcodex reads none of them except `size`; re-dump the raw
-envelope when the image path is next re-probed]`.
+value is server-chosen and varies with the prompt — `[verified-live 2026-08-07: "1254x1254";
+2026-08-20: "1402x1122"; 2026-09-27: "1370x1148"]` (returned in the envelope and printed by the
+CLI); see §5. The
+`created`/`background`/`quality`/`output_format`/`usage` field VALUES were carried from the earlier RE
+report §3 until the raw envelope was re-dumped `[verified-live 2026-09-27]` (two
+`/codex/images/generations` calls through `askcodex raw`): `background: "opaque"`,
+`output_format: "png"`, `quality: "low"`, `size: "1370x1148"`, and
+`usage: {input_tokens, input_tokens_details: {image_tokens, text_tokens}, output_tokens,
+output_tokens_details: {image_tokens, text_tokens}, total_tokens}` (22 text tokens in, 429 image
+tokens out). Each `data[]` item now carries `generation_id` next to `b64_json` (Codex parses it
+since openai/codex PR #43953, 2026-09-09); askcodex ignores it. A raw request with
+`background: "transparent"` reported `background: "transparent"`, `quality: "medium"` and 2058
+output image tokens (§5). The raw envelopes are not committed (they hold per-generation ids).
+askcodex reads none of these fields except `size`.
 
 ### 3.7 `POST /codex/responses` — streaming text completion (SSE)
 `[verified-live 2026-08-07]` (one real `askcodex ask`, plus the same call through `askcodex raw --stream`;
@@ -280,6 +331,17 @@ an adapted fixture is [`samples/responses-sse.txt`](samples/responses-sse.txt); 
 Optional: `"instructions": "<system-style>"`, `"reasoning": { "effort": "<level>" }`.
 Extra headers: `OpenAI-Beta: responses=experimental`, `Accept: text/event-stream`.
 **`store` MUST be `false`.** `[verified-live 2026-08-07]` — SSE contract below.
+
+`reasoning.effort` is validated server-side `[verified-live 2026-09-27]`:
+- `"ultra"` → HTTP 400 `invalid_value` for every model tried (`gpt-6-sol`, `gpt-6-astra`,
+  `gpt-5.6-sol`): "Supported values are: 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', and
+  'max'." askcodex therefore does not offer `ultra` although the catalog lists it (§3.3).
+- A value outside a model's set → HTTP 400 `unsupported_value`, e.g. `"none"` on `gpt-6-astra`
+  ("Supported values are: 'low', 'medium', 'high', 'xhigh', and 'max'."). `gpt-6-sol` and
+  `gpt-6-luna` accepted `none`. askcodex passes this error through; it does not pre-validate
+  per model.
+- `"minimal"` is in the server's generic list but in no model's catalog entry; askcodex does not
+  offer it `[UNVERIFIED: not sent to any model]`.
 
 ---
 
@@ -385,31 +447,46 @@ the original verify run spelled `CS`,`UB`,`-`,`VERIFY`,`-`,`OK` = `CSUB-VERIFY-O
 
 ---
 
-## 5. Image path is LOCKED server-side
+## 5. Image path: the server decides the output
 
-Every call returns exactly one opaque (RGB, no alpha) PNG. The pixel size is a **server-chosen
-value that varies between dates**, not a constant, so nothing in this repository pins it. The
-committed evidence is the live test `live_quota_image_create_writes_exactly_one_locked_size_png`
-in `tests/live.rs`, which re-reads the opacity and the envelope-size-matches-pixels halves of the
-lock out of the returned file's IHDR. The knob-by-knob matrix below comes from the earlier RE
-report §2, which is **not in this repository**.
+Every call returns exactly one PNG. The server chooses the model, the pixel size and, from the
+prompt, whether the image has an alpha channel. The committed evidence is the live test
+`live_quota_image_create_writes_exactly_one_locked_size_png` in `tests/live.rs`, which re-reads the
+colour type and the envelope-size-matches-pixels contract out of the returned file's IHDR for a
+prompt that asks for no transparency. The 2026-08-07 knob-by-knob matrix comes from the earlier RE
+report §2, which is **not in this repository**; the 2026-09-27 probes below were made with
+`askcodex raw` and `askcodex image create`, and their outputs are not committed.
 
-- Output is always **one opaque (RGB, no alpha) PNG** at a server-chosen size.
-  `[verified-live 2026-08-07: 1254×1254; 2026-08-20: 1402×1122]`
-- **Ignored knobs** (accepted in the request type, but overridden/ignored by the subscription
-  backend): `size`, `quality`, `background`/transparency, `output_format`, `n`, and even `model` (a
-  nonsense model string still returns 200 + a valid PNG). `[UNVERIFIED in this repository:
-  the per-knob matrix rests on RE report §2, which is not committed here, and was probed on
-  2026-08-07 only. Nothing depends on it — askcodex sends none of these knobs, so the matrix is the
-  REASON for that decision, not a fact askcodex acts on. The consequence that matters, one opaque
-  PNG, is verified live.]`
-- Therefore the CLI must expose **only** `prompt` (+ reference images for edit). Advertising any of the
-  ignored knobs would be a failure-masking default and is prohibited.
-- Not available on the subscription path (fields exist in the API type but backend ignores):
-  transparent/alpha cutout, custom size/aspect, quality selection, `n>1`, non-PNG output, mask
-  inpainting, `input_fidelity`, partial/streaming images, Sora/video, DALL·E. Alpha absence is
-  `[verified-live 2026-08-07, 2026-08-20]`; the rest of the list is the RE report §4 inventory and
-  carries the same not-committed caveat as the bullet above.
+- **One PNG per call, opaque unless transparency is requested.** A neutral prompt returns RGB with
+  no alpha `[verified-live 2026-08-07, 2026-08-20, 2026-09-27]`. A prompt that asks for a
+  transparent background returns RGBA with real alpha: plain `askcodex image create` (body
+  `{prompt, model}` only) gave 52.5% of pixels at alpha 0 `[verified-live 2026-09-27, one call]`.
+  Subject pixels come back at alpha 240–254, not 255, so a cutout is slightly translucent.
+- **A fixed pixel budget of about 1.57 MP; the aspect follows the prompt.** Observed sizes:
+  1254×1254 (2026-08-07, 2026-09-23, 2026-09-27), 1402×1122 (2026-08-20), 1672×941 (2026-09-24,
+  prompt said 16:9), 1448×1086 and 941×1672 (2026-09-26, the second after "Vertical 9:16 portrait
+  composition"), 1370×1148 (2026-09-27); every one is between 1,572,516 and 1,573,352 pixels
+  `[verified-live]`. An aspect stated at the end of the prompt was honored too (941×1672,
+  2026-09-27). Exact pixel sizes are not reachable.
+- **Ignored knobs:** `model` (re-probed 2026-09-27: `"gpt-image-2.5-flare"` and `"zz-not-a-model"`
+  with the same prompt returned identical envelopes, 1370×1148 and 429 output image tokens, so the
+  subscription backend picks the image model and the Images 2.5 API models cannot be selected from
+  here) `[verified-live 2026-09-27]`; `quality: "auto"` on an opaque request (same envelope as without
+  it) `[verified-live 2026-09-27]`; `size`, `output_format`, `n` and explicit quality values
+  `[UNVERIFIED since 2026-08-07: RE report §2, not committed here]`.
+- **Honored knob:** `background: "transparent"` (raw call with the body Codex `main` sends: RGBA,
+  46.2% of pixels at alpha 0, `quality: "medium"`, 41 s) `[verified-live 2026-09-27, one call]`.
+  openai/codex PR #47484 (merged 2026-09-23, in `rust-v0.159.0-alpha.9`, not in `rust-v0.157.1`)
+  gives the Codex image tool an explicit transparent-background argument.
+- **CLI consequence:** askcodex sends only `prompt` (+ reference images for edit) and `model` for
+  parity. Advertising an ignored knob would be a failure-masking default and is prohibited.
+  Transparency is reachable through the prompt; a `--transparent` flag mapped to
+  `background: "transparent"` would change the output and is therefore allowed, but it is not
+  implemented.
+- **Not available on the subscription path:** an exact size, quality selection, `n>1`, non-PNG
+  output, mask inpainting, `input_fidelity`, partial/streaming images, model selection, Sora/video,
+  DALL·E. Beyond the items verified above, this list is the RE report §4 inventory and carries the
+  same not-committed caveat.
 
 ---
 
@@ -524,12 +601,18 @@ are listed rather than smoothed over, and each one names where the gap is.
 
 - `/me` raw body: only the merged `whoami` projection was captured, and that projection is what
   [`samples/whoami-fields.json`](samples/whoami-fields.json) holds `[UNVERIFIED: low risk]`.
-- Image response envelope values (`created`, `usage`, `background`, `quality`, `output_format`):
-  carried from RE report §3, which is not in this repository, and never re-dumped
-  `[UNVERIFIED]`. askcodex reads none of them except `size`,
-  which IS verified live.
+- Image response envelope values: re-dumped live on 2026-09-27 (§3.6); only the envelope shape is
+  recorded here, not a committed artifact.
+- Which model serves `/codex/images/*`: OpenAI's Images 2.5 announcement (2026-09-08) says Images
+  2.5 rolled out to Codex users; learn.chatgpt.com's Codex image-generation page says built-in
+  generation uses `gpt-image-2`. The response names no model and the C2PA manifest says only
+  "gpt-image" `[UNVERIFIED]`.
+- Transparency: one prompt-only call and one `background: "transparent"` call on 2026-09-27; edits
+  with a transparency request, and whether transparency always raises `quality` to `medium`, are
+  `[UNVERIFIED]`.
 - The per-knob "ignored knobs" matrix in §5 rests on RE report §2, likewise not in this repository
-  `[UNVERIFIED]`. Its consequence — one opaque PNG at a server-chosen size — is verified live and
+  `[UNVERIFIED]`. `model`, `quality: "auto"` and `background` were re-probed on 2026-09-27; its
+  consequence for a neutral prompt — one opaque PNG at a server-chosen size — is verified live and
   is what `tests/live.rs` re-checks.
 - The refresh response carrying `expires_in: 864000` rests on RE report §7, not in this repository
   `[UNVERIFIED]`. askcodex's `RefreshResponse` does not model the field at all; expiry comes from the JWT

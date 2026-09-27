@@ -170,10 +170,12 @@ pub struct ReasoningLevel {
 // POST /codex/images/generations and /codex/images/edits
 // ---------------------------------------------------------------------------
 
-/// Generation request. The backend returns one opaque PNG at a size it
-/// chooses; size/quality/background/output_format/n knobs are accepted but
-/// ignored server-side, so askcodex deliberately does not model them
-/// (advertising a dropped control is a failure-masking default).
+/// Generation request. The backend returns one PNG at a size it chooses;
+/// model/size/quality/output_format/n knobs are accepted but ignored
+/// server-side, so askcodex deliberately does not model them (advertising a
+/// dropped control is a failure-masking default). `background` is honored
+/// since at least 2026-09-27 but not modelled: the prompt already reaches
+/// transparency (docs/PROTOCOL.md §5).
 #[derive(Debug, Serialize)]
 pub struct ImageGenerationRequest {
     pub prompt: String,

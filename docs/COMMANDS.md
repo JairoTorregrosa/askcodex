@@ -15,7 +15,7 @@ Commands:
   whoami      Show account identity and plan
   usage       Show rate-limit / quota usage
   models      List available agent/LLM models and modalities
-  image       Generate or edit images (always one opaque PNG; the backend picks the size)
+  image       Generate or edit images (one PNG per call; the backend picks the size)
   ask         Streaming text completion via /codex/responses
   raw         Call an arbitrary backend path (escape hatch)
   auth        Inspect or refresh the stored tokens
@@ -141,7 +141,7 @@ Options:
       --client-version <CLIENT_VERSION>
           Client version reported to the backend (required query param)
 
-          [default: 0.147.0]
+          [default: 0.157.1]
 
       --json
           One versioned JSON result (raw commands preserve the wire response)
@@ -160,7 +160,7 @@ Options:
 ## `askcodex image`
 
 ```text
-Generate or edit images (always one opaque PNG; the backend picks the size)
+Generate or edit images (one PNG per call; the backend picks the size)
 
 Usage: askcodex image [OPTIONS] <COMMAND>
 
@@ -266,7 +266,7 @@ Options:
       --model <MODEL>
           Model slug (see `askcodex models`)
 
-          [default: gpt-5.6-sol]
+          [default: gpt-6-sol]
 
       --events
           Versioned newline-delimited JSON events for semantic commands
@@ -278,7 +278,7 @@ Options:
           Reasoning effort
 
           [default: medium]
-          [possible values: low, medium, high, xhigh, max, ultra, none]
+          [possible values: low, medium, high, xhigh, max, none]
 
       --no-refresh
           Do not auto-refresh the access token even if near expiry (also disables the 401 refresh-and-retry)

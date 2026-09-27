@@ -37,19 +37,21 @@ pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 pub const ORIGINATOR: &str = "codex_cli_rs";
 
 /// Client version reported to `/codex/models` (query param is required by
-/// the backend).
-pub const CLIENT_VERSION: &str = "0.147.0";
+/// the backend). The backend hides every model whose `minimal_client_version`
+/// is newer than this value (the gpt-6 models need 0.153.0/0.155.0), so bump
+/// it to the latest stable Codex release when new models ship.
+pub const CLIENT_VERSION: &str = "0.157.1";
 
 /// `User-Agent` header sent on every call, codex-style.
-pub const USER_AGENT: &str = "codex_cli_rs/0.147.0 (askcodex)";
+pub const USER_AGENT: &str = "codex_cli_rs/0.157.1 (askcodex)";
 
-/// Image model slug codex always sends. The backend ignores it (image
-/// output is locked server-side to one opaque PNG at a server-chosen size)
+/// Image model slug codex always sends. The backend ignores it (a nonsense
+/// slug returns the same image; the server picks the model and the size)
 /// but sending it mirrors codex exactly.
 pub const IMAGE_MODEL: &str = "gpt-image-2";
 
 /// Default model for `askcodex ask`.
-pub const DEFAULT_ASK_MODEL: &str = "gpt-5.6-sol";
+pub const DEFAULT_ASK_MODEL: &str = "gpt-6-sol";
 
 /// Default reasoning effort for `askcodex ask`.
 pub const DEFAULT_ASK_EFFORT: &str = "medium";
