@@ -62,17 +62,18 @@ You are about to send one request to `gpt-6-luna` with `askcodex ask`. Luna is t
    askcodex ask - --model gpt-6-luna --effort low --json < /tmp/askcodex/luna-brief.txt > /tmp/askcodex/luna-tickets.json
    jq -r .result.text /tmp/askcodex/luna-tickets.json > /tmp/askcodex/luna-tickets.jsonl
    N=3   # the number of tickets you pasted
-   jq -se --argjson n "$N" 'length == $n and all(.[];
-     keys_unsorted == ["id","product","severity","summary"]
-     and (.id | type == "string" and length > 0)
-     and (.product == null or (.product | IN("app","api","billing")))
-     and (.severity == null or (.severity | IN(1,2,3)))
-     and (.summary | type == "string" and (split(" ") | map(select(length > 0)) | length) <= 12))' \
+   jq -Rse --argjson n "$N" 'rtrimstr("\n") | split("\n") | length == $n and all(.[];
+     (try fromjson catch null) as $o | ($o | type) == "object" and ($o |
+       keys_unsorted == ["id","product","severity","summary"]
+       and (.id | type == "string" and length > 0)
+       and (.product == null or (.product | IN("app","api","billing")))
+       and (.severity == null or (.severity | IN(1,2,3)))
+       and (.summary | type == "string" and (split(" ") | map(select(length > 0)) | length) <= 12)))' \
      /tmp/askcodex/luna-tickets.jsonl
    ```
-   Accept the output only when the last command prints `true`: one line per ticket, every
-   constraint met. `false` means a missing line or a broken constraint; a parse error means a line
-   is not JSON.
+   Accept the output only when the last command prints `true`: exactly one JSON object per
+   physical line, one line per ticket, every constraint met. `false` means a missing, blank,
+   pretty-printed or merged line, or a broken constraint.
 4. Check the answer for these failure modes before you use it: lines that do not parse or break the schema; fields, merges, or behaviors you did not ask for; guessed values where the source is silent and you asked for null.
 
 ## Rules
