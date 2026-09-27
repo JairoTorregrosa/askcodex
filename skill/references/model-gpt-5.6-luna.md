@@ -51,7 +51,7 @@ You are about to send one request to `gpt-5.6-luna` with `askcodex ask`. Use it 
      --json < /tmp/askcodex/error-lines.txt > /tmp/askcodex/luna-labels.json
    jq -r .result.text /tmp/askcodex/luna-labels.json
    ```
-   `error-lines.txt` holds the numbered log lines, pasted in full.
+   `error-lines.txt` holds the numbered log lines, pasted in full with secrets and personal data redacted.
 4. Check the answer before you use it:
    - Labels outside the set, extra keys, dropped lines, or lines merged together. Count the lines against the input.
    - A fact that the input does not contain.

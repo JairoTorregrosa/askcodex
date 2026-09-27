@@ -53,7 +53,8 @@ You are about to send one request to `gpt-5.6-terra` with `askcodex ask`. Use it
    Example `incident-notes.txt`:
    ```text
    Goal: one consolidated incident summary for the on-call handoff.
-   Context: [paste the Slack export, the timeline doc, and the postmortem draft]
+   Context: [paste the Slack export, the timeline doc, and the postmortem draft, with credentials,
+   customer data, personal details and internal hostnames redacted]
    Keep: every decision with its owner, every ticket ID, open questions, and the current mitigation.
    Output: at most 25 lines: Status, Timeline (UTC), Decisions, Open questions. Cite the source section for each decision.
    Stop rule: if two sources conflict, list both with their sections instead of choosing.
