@@ -43,7 +43,7 @@ You are about to send one request to `gpt-6-sol` with `askcodex ask`. Sol is the
    - `xhigh`: deeper analysis, thorough verification, and careful review of documents, data, and code ([5]).
    - `max`: the hardest single problem, where depth matters more than time ([4]). If it still fails, switch to Astra instead of repeating.
 2. Write the brief. For the general brief shape, follow [prompting-text.md](prompting-text.md). Then add these Sol-specific parts:
-   - Put this line in `--instructions`: "If a detail is missing, choose a reasonable default, state it in one line, and deliver the complete result. Do not ask questions." (observed 2026-09-27).
+   - Put this line in `--instructions`: "If a detail is missing, choose a reasonable default, state it in one line, and deliver the complete result. Do not ask questions." (observed 2026-09-27). For a decision or verdict, add: "If a fact the conclusion depends on is missing, list it as missing evidence and withhold the conclusion."
    - Say what done looks like, for example "the patch plus one regression test; no refactor" ([4]).
    - State the scope: diagnosis only, or diagnosis plus patch (Codex base instructions, 0.157.1).
    - Write out steps when the method matters; explicit guidance suits Sol ([11]).
