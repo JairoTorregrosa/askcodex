@@ -94,8 +94,8 @@ Checked against codex rust-v0.157.1 source, live calls, and the sources below.
    ```
    A near-identical create returned 941×1672 with alpha and exact text (observed 2026-09-27). The edit was not run.
 5. **Inspect before you report.**
-   - **Size:** run `sips -g pixelWidth -g pixelHeight -g hasAlpha <file>`. Expect about 1.57 MP at the requested aspect, and re-check on every call because these are dated backend observations.
-   - **Transparency:** `hasAlpha: yes` proves only that the channel exists. Look at the image and confirm the background is truly see-through; a drawn checkerboard is not transparency [2]. Check edges, shadows and fringes.
+   - **Size:** run `file <file>` (macOS and Linux); it prints the dimensions and `RGB` or `RGBA`, for example `PNG image data, 941 x 1672, 8-bit/color RGBA`. Expect about 1.57 MP at the requested aspect, and re-check on every call because these are dated backend observations.
+   - **Transparency:** `RGBA` proves only that the channel exists. Look at the image and confirm the background is truly see-through; a drawn checkerboard is not transparency [2]. Check edges, shadows and fringes.
    - **Text:** check every letter, accent and number of the in-image text.
    - **Preservation:** check that preserved elements and identity survived the edit, and check clothing and props in historical scenes [2].
    - **Blocked requests:** OpenAI checks prompts, input images and outputs [10]. If a request is blocked, rephrase it; do not retry it unchanged.

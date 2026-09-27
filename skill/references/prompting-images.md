@@ -113,8 +113,9 @@ one observed problem at a time.
    every call must carry its own context. Run calls that may take minutes in the background or in
    tmux.
 5. Inspect: the subject, composition, every letter and number of the text, reference fidelity,
-   the requested change, and the preserved elements. Check the real dimensions and alpha with
-   `sips -g pixelWidth -g pixelHeight -g hasAlpha <file>` when they matter for delivery. Correct a
+   the requested change, and the preserved elements. Check the real dimensions and whether the PNG
+   has an alpha channel with `file <file>` (macOS and Linux) when they matter for delivery; look at
+   the image to confirm the transparency is real. Correct a
    text error with an edit instead of regenerating a composition that works.
 
 ## Rules

@@ -31,8 +31,10 @@ You are about to send one request to `gpt-5.5` with `askcodex ask`. Send it only
 
 ## Do this
 
-1. Migrate first. Rerun the same brief on the target model at the same effort, then one level lower, and compare the answers ([3]). If a brief says "be concise", test it without that line on GPT-5.6 ([3]).
-2. If you still need GPT-5.5, choose the effort:
+1. Decide what the user asked for.
+   - To reproduce one GPT-5.5 answer, make only that call (steps 2 to 5) and mention the retirement in your report.
+   - To migrate or benchmark, rerun the same brief on the target model at the same effort, then one level lower, and compare the answers ([3]). If a brief says "be concise", test it without that line on GPT-5.6 ([3]). Spend these extra calls only when migration is the task.
+2. Choose the effort:
    - Classification or format conversion: `none`.
    - Most other work: `medium`.
    - Hard analysis: `high` or `xhigh`.
