@@ -34,7 +34,7 @@ You are about to send one request to `gpt-6-astra` with `askcodex ask`. Astra is
    - `xhigh`: demanding analysis, or a complex deliverable with exacting requirements ([6]).
    - `max`: one hardest problem where depth matters more than time. "Most tasks do not need Max or Ultra" ([5]).
 2. Write the brief. For the general brief shape, follow [prompting-text.md](prompting-text.md). Then add these Astra-specific parts:
-   - Name the decisions that are yours and let Astra assume the rest: "If a detail is missing, choose a default, state it in one line, and finish." The probe proceeded without this line, but OpenAI reports Astra asks more often ([1]), so keep it.
+   - Name the decisions that are yours and let Astra assume the rest: "If a detail is missing, choose a default, state it in one line, and finish." The probe proceeded without this line, but OpenAI reports Astra asks more often ([1]), so keep it. Carve out the facts the conclusion depends on: tell Astra to list those as missing evidence and withhold the conclusion instead of assuming them.
    - Define completion by listing every part of the deliverable ([4]).
    - Give goals, sources, templates, constraints, and checks; leave out step-by-step recipes ([4], [5]).
    - State format and length: "Plain paragraphs, no headings, at most 8 lines." For prose, paste OpenAI's excerpt: "Default to using clear, concise paragraphs, each developing one main idea" ([1]).
@@ -47,15 +47,17 @@ You are about to send one request to `gpt-6-astra` with `askcodex ask`. Astra is
    Task: Decide go/no-go for this database migration before Friday's rollout.
    Context: [migration plan, schema diff, peak write rate, rollback script]
    Constraints: The rollout date and the 5-minute downtime budget are my decisions.
-   For anything else that is missing, choose a default, state it in one line, and finish.
-   Output: The decision in one sentence, then at most 5 risks. For each risk give the
-   trigger, impact, and mitigation. Plain paragraphs, no headings.
+   If a fact the decision depends on is missing (peak write rate, rollback behavior, lock
+   duration), do not assume it: answer "No decision" and list the missing evidence.
+   For minor gaps, choose a default, state it in one line, and finish.
+   Output: The decision in one sentence ("Go", "No-go" or "No decision"), then at most 5
+   risks. For each risk give the trigger, impact, and mitigation. Plain paragraphs, no headings.
    Verification: Tie each risk to the line of the plan it comes from.
    EOF
    askcodex ask - --model gpt-6-astra --effort xhigh --json < /tmp/askcodex/astra-brief.txt > /tmp/askcodex/astra-review.json
    jq -r .result.text /tmp/askcodex/astra-review.json
    ```
-4. Check the answer for these failure modes before you use it: a clarifying question where the deliverable should be; a first pass that stops short of the parts you listed; assumptions stated at the top that contradict your context; Markdown structure you did not ask for; tests broader than you requested.
+4. Check the answer for these failure modes before you use it: a clarifying question where the deliverable should be; a first pass that stops short of the parts you listed; a decision that rests on an assumed fact instead of supplied evidence; assumptions stated at the top that contradict your context; Markdown structure you did not ask for; tests broader than you requested.
 
 ## Rules
 

@@ -60,7 +60,9 @@ output against the task.
 
    Put durable instructions in `--instructions` and the task-specific material in the prompt. Keep
    the two consistent: conflicting length or format requirements waste the call. When a detail may
-   be missing, tell the model to choose a reasonable default, state it in one line, and deliver.
+   be missing, tell the model to choose a reasonable default, state it in one line, and deliver;
+   but when the conclusion depends on a fact (a decision, a verdict, a number), tell it to name the
+   missing evidence and withhold the conclusion instead of assuming it.
 3. Shape it to the deliverable:
 
    | Deliverable | Include | Ask for |
