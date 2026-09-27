@@ -55,6 +55,9 @@ Answers stream as text. `-` reads up to 16 MiB of UTF-8 prompt text from stdin.
 Include the relevant
 source text in the prompt; a file path alone does not give the model its contents.
 Use the current catalog to choose `--model` and supported `--effort` values.
+`ask` defaults to `gpt-6-sol`; OpenAI's Codex docs offer Free and Go accounts
+only `gpt-6-luna`, so on those plans pass `--model gpt-6-luna` if the default
+is refused.
 
 ## Create and edit images
 
@@ -66,9 +69,10 @@ askcodex image edit "same crane, night scene, desk lamp" -i crane.png -o night.p
 <img src="assets/demo-image.png" alt="Generated origami crane made of graph paper" width="420">
 
 The backend returns one PNG per call at dimensions it chooses; state the aspect
-ratio in the prompt. It is opaque unless the prompt asks for a transparent
-background. There are no size, quality, transparency, format, batch, or
-image-model flags.
+ratio in the prompt. Output has been opaque unless the prompt asked for a
+transparent background, which returned real alpha in the one call tried on
+2026-09-27; check the file before relying on either. There are no size,
+quality, transparency, format, batch, or image-model flags.
 Edit accepts up to five PNG references totaling at most 25 MiB; changing an
 extension does not convert an image. Local references and output paths are checked before authentication.
 Save useful versions under distinct names and inspect the actual result.

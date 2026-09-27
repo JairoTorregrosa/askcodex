@@ -32,8 +32,8 @@
 //! The image commands expose ONLY the prompt (+ reference images for
 //! edit): the backend returns a single PNG at a size it chooses and ignores
 //! model/size/quality/format/n. Advertising ignored knobs would be a
-//! failure-masking default, so they do not exist here. Transparency follows
-//! the prompt (docs/PROTOCOL.md §5).
+//! failure-masking default, so they do not exist here. A prompt that asked
+//! for transparency has returned alpha (dated observation, docs/PROTOCOL.md §5).
 
 use std::path::PathBuf;
 

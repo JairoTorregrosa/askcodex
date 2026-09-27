@@ -1,8 +1,8 @@
 //! Image generation/edit endpoints.
 //!
 //! Backend reality (validated live): output is ALWAYS one PNG at a size the
-//! server chooses; it is opaque unless the prompt asks for a transparent
-//! background (docs/PROTOCOL.md §5). There are deliberately no
+//! server chooses. It has been opaque unless the prompt asked for a
+//! transparent background (a dated observation, docs/PROTOCOL.md §5). There are deliberately no
 //! size/quality/background/format/n parameters anywhere in this module.
 //!
 //! Both endpoints share the same response contract, so decoding lives in
