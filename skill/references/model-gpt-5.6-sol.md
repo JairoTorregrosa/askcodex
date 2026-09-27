@@ -71,7 +71,7 @@ You are about to send one request to `gpt-5.6-sol` with `askcodex ask`. Use it f
 - Do not use it for bulk extraction or classification; use [model-gpt-5.6-luna.md](model-gpt-5.6-luna.md). Do not use it for long routine inputs where near-Sol quality is enough; use [model-gpt-5.6-terra.md](model-gpt-5.6-terra.md).
 - Do not write "be concise" alone, and do not repeat the same rule in `--instructions` and the prompt ([2]).
 - Do not set `max` as a default ([2]).
-- Do not retry a `cyber_policy` block unchanged. Restate the request around a defensive outcome, or report the block.
+- Do not retry or reword a `cyber_policy` block to get around it. Report the block; if a narrower defensive version still meets the user's goal, propose it and run it only with their agreement, saying what changed.
 - Do not compare this model with its siblings by `reasoning_tokens`. See Unverified.
 
 ## Report
