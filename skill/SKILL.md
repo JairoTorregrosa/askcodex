@@ -34,11 +34,15 @@ the user the useful output with its saved path.
   `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`,
   `gpt-daybreak-blue-latest`, `gpt-5.5` (retires 2026-10-14), and the hidden `gpt-reserve` and
   `codex-auto-review`. All take text; `ask` sends text only.
-- `ask` defaults to `gpt-6-sol` at `medium`. `--effort` takes `low`, `medium`, `high`, `xhigh`,
+- `ask` defaults to `gpt-6-sol` at `medium`. The catalog lists it for every plan, but OpenAI's
+  Codex docs offer Free and Go accounts only `gpt-6-luna`; on those plans, if the default fails
+  with a model-availability error, pass `--model gpt-6-luna`. askcodex never switches models on
+  its own. `--effort` takes `low`, `medium`, `high`, `xhigh`,
   `max`, or `none`. The catalog also lists `ultra`, which is Codex's multi-agent mode; the backend
   rejects it. A level a model does not take fails with HTTP 400 (`none` on `gpt-6-astra`).
 - `image create` and `image edit` return one PNG per call of about 1.57 megapixels. The prompt sets
-  the aspect ratio and can ask for a transparent background. There is no model, size, quality,
+  the aspect ratio and can ask for a transparent background (one successful call on 2026-09-27;
+  check the alpha before you rely on it). There is no model, size, quality,
   format, or count flag, because the backend ignores those fields.
 - `transcribe` takes a WAV file up to 25 MiB and has no model or language selector.
 
@@ -63,7 +67,7 @@ the user the useful output with its saved path.
    | Clear, repeatable extraction, classification, or transformation | `gpt-6-luna` | [model-gpt-6-luna.md](references/model-gpt-6-luna.md) |
    | Authorized defensive security work | `gpt-daybreak-blue-latest` | [model-gpt-daybreak-blue-latest.md](references/model-gpt-daybreak-blue-latest.md) |
    | Reproducing a GPT-5.6 result | `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` | [sol](references/model-gpt-5.6-sol.md), [terra](references/model-gpt-5.6-terra.md), [luna](references/model-gpt-5.6-luna.md) |
-   | Anything on `gpt-5.5` | move to `gpt-6-sol` | [model-gpt-5.5.md](references/model-gpt-5.5.md) |
+   | Anything on `gpt-5.5` | move to `gpt-6-sol` (`gpt-6-luna` on Free and Go) | [model-gpt-5.5.md](references/model-gpt-5.5.md) |
 
    [prompting.md](references/prompting.md) indexes every guide. Pin `--model` and `--effort`
    whenever you compare outputs or need to reproduce one.
