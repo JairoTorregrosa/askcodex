@@ -210,15 +210,16 @@ backend was never told the truth about.
 | `live_models_lists_slugs_and_decodes_into_the_typed_catalog` | The catalog is a non-empty array; every entry decodes into `ModelInfo` and carries a non-empty `slug`; at least one model accepts text input; the human header counts what the array holds. |
 | `live_raw_get_codex_usage_reaches_the_same_endpoint_as_the_usage_command` | `raw GET /codex/usage` returns a document with the same top-level key set as `askcodex usage` (keys only — values move between two calls). |
 | `live_read_only_suite_never_mutates_auth_json` | `auth.json` is byte-size- and mtime-identical after the whole read-only tier. |
-| `live_quota_image_create_writes_exactly_one_locked_size_png` | Exactly one file is written; PNG signature and IHDR are valid; the colour type is **2** (RGB, no alpha); the reported `size` matches the pixels; the reported byte count matches the file. The exact dimensions are deliberately not pinned — the size is a server-chosen value that changes over time. |
+| `live_quota_image_create_writes_exactly_one_locked_size_png` | Exactly one file is written; PNG signature and IHDR are valid; the colour type is **2** (RGB, no alpha) for its neutral prompt; the reported `size` matches the pixels; the reported byte count matches the file. The exact dimensions are deliberately not pinned — the size is a server-chosen value that changes over time. |
 | `live_quota_image_edit_returns_one_locked_size_png_from_a_reference` | Same image contract, plus `ref_images == 1`. |
 | `live_quota_ask_streams_a_completed_answer` | The SSE stream completes; askcodex reports the model it used; the answer is non-empty. |
 
-The image assertions are the interesting ones. The backend locks image output
-to a single opaque PNG at a size it chooses and ignores every knob askcodex could
-send (size, quality, background, format, n, model). That lock is documented in
-`README.md`, `docs/PROTOCOL.md` §5 and `skill/SKILL.md`; this test is how the
-project learns if it changes. The exact dimensions are not asserted, because
+The image assertions are the interesting ones. The backend returns a single
+PNG at a size it chooses and ignores the model, size, quality, format and n
+knobs; a prompt with no transparency request comes back opaque. That contract
+is documented in `README.md`, `docs/PROTOCOL.md` §5 and `skill/SKILL.md`; this
+test is how the project learns if it changes. Its prompts never ask for
+transparency, because a prompt that does can return RGBA (§5). The exact dimensions are not asserted, because
 the server picks them and has picked differently on different dates.
 
 What is read back out of the file's IHDR rather than trusted from the

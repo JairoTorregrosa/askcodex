@@ -710,7 +710,10 @@ fn every_subcommand_help_names_its_own_flags() {
             &["Show rate-limit / quota usage", "--json", "--no-refresh"],
         ),
         (&["models", "--help"], &["--client-version", "--json"]),
-        (&["image", "--help"], &["create", "edit", "one opaque PNG"]),
+        (
+            &["image", "--help"],
+            &["create", "edit", "one PNG per call"],
+        ),
         (
             &["image", "create", "--help"],
             &["<PROMPT>", "--out", "[default: image.png]"],
@@ -727,7 +730,7 @@ fn every_subcommand_help_names_its_own_flags() {
                 "--model",
                 "--instructions",
                 "--effort",
-                "[possible values: low, medium, high, xhigh, max, ultra, none]",
+                "[possible values: low, medium, high, xhigh, max, none]",
             ],
         ),
         (
@@ -1257,6 +1260,7 @@ fn unknown_subcommands_and_bad_values_exit_two() {
         (&["image", "bogus", "p"], "unrecognized subcommand"),
         (&["auth", "bogus"], "unrecognized subcommand"),
         (&["ask", "x", "--effort", "huge"], "invalid value 'huge'"),
+        (&["ask", "x", "--effort", "ultra"], "invalid value 'ultra'"),
         (&["raw", "post", "/x"], "invalid value 'post'"),
         (&["raw", "GET"], "required arguments were not provided"),
         (

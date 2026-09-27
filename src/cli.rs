@@ -30,9 +30,10 @@
 //! There is deliberately no flag that widens that set.
 //!
 //! The image commands expose ONLY the prompt (+ reference images for
-//! edit): the backend returns a single opaque PNG at a size it chooses and
-//! ignores size/quality/background/format/n. Advertising ignored knobs
-//! would be a failure-masking default, so they do not exist here.
+//! edit): the backend returns a single PNG at a size it chooses and ignores
+//! model/size/quality/format/n. Advertising ignored knobs would be a
+//! failure-masking default, so they do not exist here. Transparency follows
+//! the prompt (docs/PROTOCOL.md §5).
 
 use std::path::PathBuf;
 
@@ -91,7 +92,7 @@ pub enum Cmd {
         client_version: String,
     },
 
-    /// Generate or edit images (always one opaque PNG; the backend picks the size).
+    /// Generate or edit images (one PNG per call; the backend picks the size).
     Image {
         #[command(subcommand)]
         cmd: ImageCmd,
@@ -204,6 +205,10 @@ pub enum AuthCmd {
 }
 
 /// Reasoning effort accepted by `--effort` (backend-validated set).
+///
+/// The catalog also lists `ultra` for some models, but that is a Codex
+/// client-side multi-agent mode: `/codex/responses` rejects it with HTTP 400
+/// for every model, so it is not offered here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum Effort {
     Low,
@@ -211,7 +216,6 @@ pub enum Effort {
     High,
     Xhigh,
     Max,
-    Ultra,
     None,
 }
 
@@ -224,7 +228,6 @@ impl Effort {
             Effort::High => "high",
             Effort::Xhigh => "xhigh",
             Effort::Max => "max",
-            Effort::Ultra => "ultra",
             Effort::None => "none",
         }
     }
@@ -350,6 +353,9 @@ mod tests {
     fn raw_rejects_lowercase_method_and_unknown_effort() {
         assert!(Cli::try_parse_from(["askcodex", "raw", "post", "/x"]).is_err());
         assert!(Cli::try_parse_from(["askcodex", "ask", "x", "--effort", "huge"]).is_err());
+        // Catalog-only effort: /codex/responses answers HTTP 400 to it, so
+        // the parser refuses it before any credential is loaded.
+        assert!(Cli::try_parse_from(["askcodex", "ask", "x", "--effort", "ultra"]).is_err());
     }
 
     #[test]

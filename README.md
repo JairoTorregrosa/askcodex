@@ -65,8 +65,10 @@ askcodex image edit "same crane, night scene, desk lamp" -i crane.png -o night.p
 
 <img src="assets/demo-image.png" alt="Generated origami crane made of graph paper" width="420">
 
-The observed backend output is one opaque PNG at server-selected dimensions.
-There are no size, quality, transparency, format, batch, or image-model flags.
+The backend returns one PNG per call at dimensions it chooses; state the aspect
+ratio in the prompt. It is opaque unless the prompt asks for a transparent
+background. There are no size, quality, transparency, format, batch, or
+image-model flags.
 Edit accepts up to five PNG references totaling at most 25 MiB; changing an
 extension does not convert an image. Local references and output paths are checked before authentication.
 Save useful versions under distinct names and inspect the actual result.

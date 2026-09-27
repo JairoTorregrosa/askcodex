@@ -79,9 +79,11 @@ const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
 
 /// PNG color type 2: truecolor RGB, with NO alpha channel (the alpha-
 /// bearing types are 4 and 6). docs/PROTOCOL.md §5 records `hasAlpha: no`
-/// as verified against the bytes the backend actually returned, not merely
-/// as an envelope field — so the "opaque" half of the documented image lock
-/// is a claim this suite is entitled to check, exactly like the size.
+/// for prompts that do not ask for transparency, verified against the bytes
+/// the backend actually returned — so this suite is entitled to check it for
+/// its own neutral prompts, exactly like the size. A prompt that asks for a
+/// transparent background can come back RGBA (§5), so never reuse this
+/// check on such a prompt.
 const PNG_COLOR_TYPE_RGB: u8 = 2;
 
 /// A 64x64 8-bit RGB PNG (166 bytes), used as the reference input for
@@ -1004,9 +1006,9 @@ fn live_quota_image_edit_returns_one_locked_size_png_from_a_reference() {
     assert_locked_png(&out, &doc, what);
 }
 
-/// The image contract this project documents: one PNG, in the opaque color
-/// type the backend locks every generation to, with the reported metadata
-/// matching the bytes on disk.
+/// The image contract this project documents for a prompt with no
+/// transparency request: one PNG, in the opaque color type, with the
+/// reported metadata matching the bytes on disk.
 ///
 /// The exact pixel size is deliberately NOT asserted: it is a server-chosen
 /// value that varies between dates (docs/PROTOCOL.md §5 records the observed
@@ -1022,8 +1024,9 @@ fn assert_locked_png(path: &Path, doc: &Value, what: &str) {
     assert_eq!(
         color_type, PNG_COLOR_TYPE_RGB,
         "{what}: the PNG declares color type {color_type}, not {PNG_COLOR_TYPE_RGB} \
-         (truecolor RGB, no alpha) — the documented opaque-image lock changed, and \
-         docs/PROTOCOL.md, README.md and skill/SKILL.md all need updating"
+         (truecolor RGB, no alpha) for a prompt that asked for no transparency — \
+         the documented image contract changed, and docs/PROTOCOL.md, README.md \
+         and skill/SKILL.md all need updating"
     );
 
     let reported_size = required_str(doc, "size", what);
