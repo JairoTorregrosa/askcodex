@@ -73,11 +73,13 @@ You are about to send one request to `gpt-6-luna` with `askcodex ask`. Luna is t
        and (.summary | type == "string" and (split(" ") | map(select(length > 0)) | length) <= 12)))' \
      /tmp/askcodex/luna-tickets.jsonl
    ```
-   Accept the output only when the last command prints `true`: exactly one JSON object per
-   physical line, one line per pasted ticket with its id in order, every constraint met. `false`
-   means a missing, extra, blank, pretty-printed or merged line, an invented or reordered id, or a
-   broken constraint. Paste only tickets that carry an id; ask the user for missing ids first.
-4. Check the answer for these failure modes before you use it: lines that do not parse or break the schema; fields, merges, or behaviors you did not ask for; guessed values where the source is silent and you asked for null.
+   The command checks structure only: exactly one JSON object per physical line, one line per
+   pasted ticket with its id in order, and every key, enum, range and length rule. `false` means a
+   missing, extra, blank, pretty-printed or merged line, an invented or reordered id, or a broken
+   rule. `true` is not proof that the values are right: step 4 still compares each product,
+   severity and summary with its ticket. Paste only tickets that carry an id; ask the user for
+   missing ids first.
+4. Check the answer for these failure modes before you use it, comparing each value with its source ticket (a sample for large batches, saying how many you checked): lines that do not parse or break the schema; fields, merges, or behaviors you did not ask for; guessed values where the source is silent and you asked for null.
 
 ## Rules
 
