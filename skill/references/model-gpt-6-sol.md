@@ -43,7 +43,7 @@ You are about to send one request to `gpt-6-sol` with `askcodex ask`. Sol is the
    - `xhigh`: deeper analysis, thorough verification, and careful review of documents, data, and code ([5]).
    - `max`: the hardest single problem, where depth matters more than time ([4]). If it still fails, switch to Astra instead of repeating.
 2. Write the brief. For the general brief shape, follow [prompting-text.md](prompting-text.md). Then add these Sol-specific parts:
-   - Put this line in `--instructions`: "If a detail is missing, choose a reasonable default, state it in one line, and deliver the complete result. Do not ask questions." (observed 2026-09-27). For a decision or verdict, add: "If a fact the conclusion depends on is missing, list it as missing evidence and withhold the conclusion."
+   - Put this line in `--instructions`: "If a detail is missing, choose a reasonable default, state it in one line, and deliver the complete result. Do not ask questions." (observed 2026-09-27). Always add the carve-out: "If code or a fact that the diagnosis, fix or conclusion depends on is missing, name it and withhold that part instead of guessing."
    - Say what done looks like, for example "the patch plus one regression test; no refactor" ([4]).
    - State the scope: diagnosis only, or diagnosis plus patch (Codex base instructions, 0.157.1).
    - Write out steps when the method matters; explicit guidance suits Sol ([11]).
@@ -63,11 +63,11 @@ You are about to send one request to `gpt-6-sol` with `askcodex ask`. Sol is the
    Verification: Say which input from the test output your cause explains.
    EOF
    askcodex ask - --model gpt-6-sol --effort high \
-     --instructions "If a detail is missing, choose a reasonable default, state it in one line, and deliver the complete result. Do not ask questions." \
+     --instructions "If a detail is missing, choose a reasonable default, state it in one line, and deliver the complete result. Do not ask questions. If code or a fact that the diagnosis or fix depends on is missing, name it and withhold the diagnosis or patch instead of guessing." \
      --json < /tmp/askcodex/sol-brief.txt > /tmp/askcodex/sol-fix.json
    jq -r .result.text /tmp/askcodex/sol-fix.json
    ```
-4. Check the answer for these failure modes before you use it: questions where the deliverable should be; a stated default that conflicts with your intent; a list you needed complete that was trimmed; work beyond the scope you defined as done.
+4. Check the answer for these failure modes before you use it: questions where the deliverable should be; a patch or diagnosis that relies on code you did not paste; a stated default that conflicts with your intent; a list you needed complete that was trimmed; work beyond the scope you defined as done.
 
 ## Rules
 

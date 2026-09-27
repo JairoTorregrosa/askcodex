@@ -56,6 +56,7 @@ You are about to send one request to `gpt-daybreak-blue-latest` with `askcodex a
    Context: [paste the route handlers and the auth middleware, secrets redacted]
    Output: findings ranked by evidence and impact, each with the line, the attacker precondition, the impact, and a patch; then the tests that would prove each patch. An empty list is allowed.
    Do not write working exploit code; describe the trigger in one line.
+   If code a finding depends on is missing, name the missing file instead of guessing.
    ```
 5. Check the answer before you use it:
    - Whether each finding is reachable in the code you pasted.
