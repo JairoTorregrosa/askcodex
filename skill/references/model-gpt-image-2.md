@@ -98,7 +98,7 @@ Checked against codex rust-v0.157.1 source, live calls, and the sources below.
    - **Transparency:** `RGBA` proves only that the channel exists. Look at the image and confirm the background is truly see-through; a drawn checkerboard is not transparency [2]. Check edges, shadows and fringes.
    - **Text:** check every letter, accent and number of the in-image text.
    - **Preservation:** check that preserved elements and identity survived the edit, and check clothing and props in historical scenes [2].
-   - **Blocked requests:** OpenAI checks prompts, input images and outputs [10]. If a request is blocked, rephrase it; do not retry it unchanged.
+   - **Blocked requests:** OpenAI checks prompts, input images and outputs [10]. If a request is blocked, report the block to the user. Do not reword it to get around the block or silently drop the blocked element. If a narrower version that is clearly allowed still meets the user's goal, propose it, and run it only with their agreement, saying what changed.
 
 ## Rules
 
