@@ -116,8 +116,10 @@ the user the useful output with its saved path.
 
 ## Report
 
-Tell the user what you ran (command, model, effort), the outcome, the artifact path, and any
-limitation that affects the result. Show an image when the user needs to judge it visually.
+Tell the user the command you ran, the outcome, the artifact path if one was saved, and any
+limitation that affects the result. For `ask`, add the model and effort. For an image, give the
+file's real dimensions and never name a serving model: the backend does not report one. Show an
+image when the user needs to judge it visually.
 
 ## Install
 
