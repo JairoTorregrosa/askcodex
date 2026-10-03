@@ -229,12 +229,19 @@ impl Checker<'_> {
         {
             return fail(at, "value matches none of the anyOf branches");
         }
+        // A branch that uses a keyword this module leaves to the backend
+        // (`pattern`, `format`, ...) can pass here and still fail there, so
+        // a pass is only optimistic. That is safe for `allOf` and `anyOf`
+        // (they only get more lenient), but would turn `not` and the
+        // "exactly one" of `oneOf` into false rejections: those checks run
+        // only over fully checkable branches.
         if let Some(one) = branches("oneOf") {
             let matched = one
                 .iter()
                 .filter(|branch| self.check(branch, value, at, depth).is_ok())
                 .count();
-            if matched != 1 {
+            let exact = one.iter().all(|branch| self.fully_checked(branch, 0));
+            if matched == 0 || (exact && matched != 1) {
                 return fail(
                     at,
                     format!("value matches {matched} oneOf branches, not exactly 1"),
@@ -242,11 +249,97 @@ impl Checker<'_> {
             }
         }
         if let Some(not) = schema.get("not")
+            && self.fully_checked(not, 0)
             && self.check(not, value, at, depth).is_ok()
         {
             return fail(at, "value matches the schema under not");
         }
         Ok(())
+    }
+
+    /// Whether every keyword in `schema`, and in every subschema it can
+    /// reach, is one this module evaluates (or an annotation). A cycle or
+    /// a schema too deep to walk counts as not fully checked.
+    fn fully_checked(&self, schema: &Value, depth: usize) -> bool {
+        const EVALUATED: [&str; 20] = [
+            "type",
+            "properties",
+            "required",
+            "additionalProperties",
+            "items",
+            "prefixItems",
+            "minItems",
+            "maxItems",
+            "enum",
+            "const",
+            "anyOf",
+            "allOf",
+            "oneOf",
+            "not",
+            "minimum",
+            "maximum",
+            "exclusiveMinimum",
+            "exclusiveMaximum",
+            "minLength",
+            "maxLength",
+        ];
+        const ANNOTATIONS: [&str; 12] = [
+            "$ref",
+            "$defs",
+            "definitions",
+            "$schema",
+            "$id",
+            "$comment",
+            "title",
+            "description",
+            "default",
+            "examples",
+            "deprecated",
+            "readOnly",
+        ];
+        if depth > MAX_DEPTH {
+            return false;
+        }
+        let schema = match schema {
+            Value::Bool(_) => return true,
+            Value::Object(schema) => schema,
+            _ => return false,
+        };
+        let next = depth + 1;
+        let known = |key: &str| EVALUATED.contains(&key) || ANNOTATIONS.contains(&key);
+        if !schema.keys().all(|key| known(key) || key == "writeOnly") {
+            return false;
+        }
+        let subschemas = schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flat_map(|properties| properties.values())
+            .chain(
+                ["items", "additionalProperties", "not"]
+                    .iter()
+                    .filter_map(|k| schema.get(*k)),
+            )
+            .chain(
+                ["prefixItems", "anyOf", "allOf", "oneOf"]
+                    .iter()
+                    .filter_map(|k| schema.get(*k).and_then(Value::as_array))
+                    .flatten(),
+            );
+        let reference = match schema.get("$ref").and_then(Value::as_str) {
+            Some(reference) => match reference
+                .strip_prefix('#')
+                .and_then(|p| self.root.pointer(p))
+            {
+                Some(target) => self.fully_checked(target, next),
+                None => false,
+            },
+            None => true,
+        };
+        reference
+            && subschemas
+                .into_iter()
+                .all(|sub| self.fully_checked(sub, next))
     }
 
     fn check_bounds(
@@ -451,6 +544,26 @@ mod tests {
         assert!(check(&json!(false), &json!(1)).is_err());
         assert!(check(&json!(true), &json!(1)).is_ok());
         assert!(check(&json!({"const": 1}), &json!(1.0)).is_ok());
+    }
+
+    #[test]
+    fn keywords_left_to_the_backend_never_cause_a_false_rejection() {
+        // `pattern` is not evaluated here, so `not` over it must not be
+        // read as "matched", and `oneOf` cannot demand exactly one.
+        let not_pattern = json!({"type": "string", "not": {"pattern": "^x"}});
+        assert!(check(&not_pattern, &json!("abc")).is_ok());
+        let one_of = json!({"oneOf": [{"type": "string", "pattern": "^a"},
+                                      {"type": "string", "pattern": "^b"}]});
+        assert!(check(&one_of, &json!("abc")).is_ok());
+        assert!(
+            check(&one_of, &json!(7)).is_err(),
+            "no branch can match a number"
+        );
+        // Fully checkable branches keep the exact semantics.
+        assert!(check(&json!({"not": {"type": "string"}}), &json!("abc")).is_err());
+        let recursive =
+            json!({"$defs": {"t": {"not": {"$ref": "#/$defs/t"}}}, "$ref": "#/$defs/t"});
+        let _ = check(&recursive, &json!(1));
     }
 
     #[test]
