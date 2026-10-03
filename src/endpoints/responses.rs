@@ -182,12 +182,13 @@ fn consume_stream<R: BufRead>(
 fn stream_failure(raw: &Value) -> Error {
     let kind = raw.get("type").and_then(Value::as_str).unwrap_or("?");
     let backend = if kind == "response.incomplete" {
-        // Only the reason: the rest of the details object is not ours to log.
+        // Only a scalar reason, bounded like every other diagnostic field:
+        // the rest of the details object is not ours to log.
         let reason = raw
             .get("response")
             .and_then(|response| response.get("incomplete_details"))
             .and_then(|details| details.get("reason"))
-            .cloned()
+            .and_then(crate::error::bounded_scalar)
             .unwrap_or(Value::Null);
         Some(serde_json::json!({ "incomplete_details": { "reason": reason } }))
     } else {
@@ -751,6 +752,26 @@ mod tests {
                 assert!(snippet.len() <= config::ERROR_SNIPPET_BYTES)
             }
             other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_incomplete_reason_is_bounded_and_never_a_nested_payload() {
+        for (reason, expected) in [
+            (json!({"echo": "PRIVATE prompt"}), json!(null)),
+            (
+                json!("r".repeat(5000)),
+                json!("r".repeat(config::ERROR_SNIPPET_BYTES)),
+            ),
+        ] {
+            let event = json!({"type": "response.incomplete",
+                               "response": {"incomplete_details": {"reason": reason, "extra": "PRIVATE"}}});
+            let (result, _) = run_ask(&frame("response.incomplete", &event.to_string()), &prompt());
+            let err = result.unwrap_err();
+            assert_eq!(
+                err.backend_detail(),
+                Some(&json!({"incomplete_details": {"reason": expected}}))
+            );
         }
     }
 

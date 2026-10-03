@@ -257,22 +257,28 @@ pub fn diagnostic_fields(object: &serde_json::Value) -> Option<serde_json::Value
     let object = object.as_object()?;
     let mut kept = serde_json::Map::new();
     for key in KEYS {
-        let value = match object.get(key) {
-            Some(serde_json::Value::String(text)) => {
-                let mut end = text.len().min(crate::config::ERROR_SNIPPET_BYTES);
-                while !text.is_char_boundary(end) {
-                    end -= 1;
-                }
-                serde_json::Value::String(text[..end].to_string())
-            }
-            Some(scalar @ (serde_json::Value::Number(_) | serde_json::Value::Bool(_))) => {
-                scalar.clone()
-            }
-            _ => continue,
-        };
-        kept.insert(key.to_string(), value);
+        if let Some(value) = object.get(key).and_then(bounded_scalar) {
+            kept.insert(key.to_string(), value);
+        }
     }
     (!kept.is_empty()).then_some(serde_json::Value::Object(kept))
+}
+
+/// A string cut to `config::ERROR_SNIPPET_BYTES` (on a char boundary), a
+/// number or a bool; `None` for null, arrays and objects, which a
+/// diagnostic never copies.
+pub fn bounded_scalar(value: &serde_json::Value) -> Option<serde_json::Value> {
+    match value {
+        serde_json::Value::String(text) => {
+            let mut end = text.len().min(crate::config::ERROR_SNIPPET_BYTES);
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            Some(serde_json::Value::String(text[..end].to_string()))
+        }
+        serde_json::Value::Number(_) | serde_json::Value::Bool(_) => Some(value.clone()),
+        _ => None,
+    }
 }
 
 impl Error {

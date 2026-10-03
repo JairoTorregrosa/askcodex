@@ -386,13 +386,17 @@ impl Client {
             let (_parts, response_body) = response.into_parts();
             // The guidance is charged against the documented snippet
             // bound, not appended past it: the body gets whatever
-            // `ERROR_SNIPPET_BYTES` leaves after the guidance.
-            let body = snippet_of_body_bounded(
-                response_body,
-                config::ERROR_SNIPPET_BYTES - NO_REFRESH_GUIDANCE.len(),
-            );
-            let snippet = format!("{body}{NO_REFRESH_GUIDANCE}");
-            return Err(http_status_error(method, path, 401, snippet));
+            // `ERROR_SNIPPET_BYTES` leaves after the guidance. The
+            // backend's error fields are recovered like any other status.
+            let read = ErrorBody::read(response_body);
+            let body = read.snippet(config::ERROR_SNIPPET_BYTES - NO_REFRESH_GUIDANCE.len());
+            return Err(Error::HttpStatus {
+                method: method.to_string(),
+                path: path.to_string(),
+                status: 401,
+                snippet: format!("{body}{NO_REFRESH_GUIDANCE}"),
+                backend: read.backend(),
+            });
         }
 
         // Exactly one refresh (it persists the rotated tokens itself,
@@ -738,43 +742,63 @@ fn http_error(source: impl Into<ureq::http::Error>) -> Error {
     Error::Transport(ureq::Error::Http(source.into()))
 }
 
-/// Build the loud non-2xx error.
-fn http_status_error(method: &Method, path: &str, status: u16, snippet: String) -> Error {
-    Error::HttpStatus {
-        method: method.to_string(),
-        path: path.to_string(),
-        status,
-        snippet,
-        backend: None,
-    }
-}
-
-/// The loud non-2xx error, with the backend's JSON error object recovered
+/// Build the loud non-2xx error, with the backend's JSON error fields recovered
 /// for machine diagnostics. The body is read once, bounded by
 /// `config::ERROR_BODY_PARSE_BYTES`; the message still quotes at most
 /// `config::ERROR_SNIPPET_BYTES` of it. A read failure or a non-JSON (or
 /// over-long, hence cut) body leaves `backend` empty instead of guessing.
 fn http_status_error_from_body(method: &Method, path: &str, status: u16, body: Body) -> Error {
-    let limit = config::ERROR_BODY_PARSE_BYTES as u64;
-    let mut reader = body.into_with_config().limit(limit).reader().take(limit);
-    let mut buf = Vec::new();
-    let read = reader.read_to_end(&mut buf);
-    let snippet = match (&read, buf.is_empty()) {
-        (Ok(_), true) => "<empty body>".to_string(),
-        (Err(_), true) => "<error body unreadable>".to_string(),
-        _ => snippet_of_bytes(&buf),
-    };
-    let complete = read.is_ok() && buf.len() < config::ERROR_BODY_PARSE_BYTES;
-    let backend = complete
-        .then(|| serde_json::from_slice::<Value>(&buf).ok())
-        .flatten()
-        .and_then(|document| crate::error::backend_error_detail(&document));
+    let read = ErrorBody::read(body);
     Error::HttpStatus {
         method: method.to_string(),
         path: path.to_string(),
         status,
-        snippet,
-        backend,
+        snippet: read.snippet(config::ERROR_SNIPPET_BYTES),
+        backend: read.backend(),
+    }
+}
+
+/// A non-2xx body, read once and bounded by `config::ERROR_BODY_PARSE_BYTES`.
+/// Never propagates a read failure: the HTTP status is the error being
+/// reported and must not be displaced by a failure to gather context.
+struct ErrorBody {
+    bytes: Vec<u8>,
+    /// Read to the end without error and below the parse bound.
+    complete: bool,
+}
+
+impl ErrorBody {
+    fn read(body: Body) -> Self {
+        let limit = config::ERROR_BODY_PARSE_BYTES as u64;
+        let mut reader = body.into_with_config().limit(limit).reader().take(limit);
+        let mut bytes = Vec::new();
+        let read = reader.read_to_end(&mut bytes);
+        let complete = read.is_ok() && bytes.len() < config::ERROR_BODY_PARSE_BYTES;
+        if read.is_err() && bytes.is_empty() {
+            return ErrorBody {
+                bytes: b"<error body unreadable>".to_vec(),
+                complete: false,
+            };
+        }
+        ErrorBody { bytes, complete }
+    }
+
+    /// At most `max` bytes for the message; an empty body says so.
+    fn snippet(&self, max: usize) -> String {
+        if self.bytes.is_empty() {
+            return "<empty body>".to_string();
+        }
+        snippet_of_bytes_bounded(&self.bytes, max)
+    }
+
+    /// The backend's actionable error fields, when the whole body is JSON.
+    fn backend(&self) -> Option<Value> {
+        if !self.complete {
+            return None;
+        }
+        serde_json::from_slice::<Value>(&self.bytes)
+            .ok()
+            .and_then(|document| crate::error::backend_error_detail(&document))
     }
 }
 
@@ -795,27 +819,6 @@ fn read_body_limited(body: Body, limit: u64) -> Result<Vec<u8>, Error> {
         .read_to_end(&mut buf)
         .map_err(|e| Error::Transport(ureq::Error::from(e)))?;
     Ok(buf)
-}
-
-/// Best-effort bounded snippet of an error body, with an explicit budget,
-/// for the one caller that has to share `config::ERROR_SNIPPET_BYTES` with
-/// appended guidance. Never propagates a read failure: the HTTP status is
-/// the error being reported and must not be displaced by a failure to
-/// gather context. A body that cannot be read at all is reported as such
-/// rather than as an empty string.
-fn snippet_of_body_bounded(body: Body, max: usize) -> String {
-    // Doubly bounded: ureq's own limit plus a `take` that stops before the
-    // limit can fire, so an oversized error body yields a snippet instead
-    // of a read error.
-    let limit = max as u64;
-    let mut reader = body.into_with_config().limit(limit).reader().take(limit);
-    let mut buf = Vec::new();
-    match reader.read_to_end(&mut buf) {
-        Ok(_) if buf.is_empty() => "<empty body>".to_string(),
-        Ok(_) => snippet_of_bytes_bounded(&buf, max),
-        Err(_) if buf.is_empty() => "<error body unreadable>".to_string(),
-        Err(_) => snippet_of_bytes_bounded(&buf, max),
-    }
 }
 
 /// Lossy UTF-8 of at most `config::ERROR_SNIPPET_BYTES` bytes.
@@ -1820,6 +1823,11 @@ mod tests {
             }
             ref other => panic!("wrong error: {other:?}"),
         }
+        // The backend's own fields survive the no-refresh path too.
+        assert_eq!(
+            err.backend_detail(),
+            Some(&serde_json::json!({"error": "expired"}))
+        );
         assert!(!err.to_string().contains(FAKE_ACCESS_TOKEN));
         assert_eq!(backend.calls(), 1, "no retry when --no-refresh is set");
         assert_eq!(
