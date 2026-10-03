@@ -89,7 +89,22 @@ shfmt -d -i 4 install.sh tests/install.bats
 The installer defaults to installing only the binary. `--skills agents|claude|all`
 selects skill synchronization explicitly; `--check-auth` checks stored credentials
 without refreshing. Tests cover selection, invalid arguments, authentication
-isolation, backups, idempotence, locks, and existing directory permissions.
+isolation, backups kept outside the skills directories (`XDG_DATA_HOME`, name
+collisions, and moving the `askcodex.bak*` siblings older installers left),
+the cross-filesystem copy, verify, publish and remove path (selected by
+refusing the installer's hard-link probe), partial copies that are never
+reused, leftovers that are never offered as a rollback and that later runs
+finish removing (a leftover that still holds a SKILL.md fails the run), skills
+directories shared through a symlink (wired once, one rollback, including a
+link to a directory not created yet), the printed rollback (it restores a copy,
+keeps the backup, survives a failed copy and a retry) and its refusal when the
+source is gone, a backup directory that resolves inside a skills directory
+(fallback or refusal), an interrupt after a backup is published (the parked
+copy stops loading at once) or before (the parked skill is swapped back in
+and the partial copy discarded), restoration after a failed or interrupted swap
+(also when a second signal arrives during cleanup), idempotence, locks, and
+existing directory permissions. The tests remove any inherited
+`XDG_DATA_HOME`, so a run never writes to the real data directory.
 
 ---
 

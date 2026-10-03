@@ -16,7 +16,7 @@ Keep instructions and implementation aligned. Internal modules may change; prese
 
 Use the pinned toolchain in `rust-toolchain.toml`; honor the MSRV in `Cargo.toml`.
 Run `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, and `cargo test --locked`.
-Changes to the installer also require `shellcheck install.sh tests/install.bats`, `shfmt -d install.sh`, and `bats tests/install.bats`.
+Changes to the installer also require `shellcheck install.sh tests/install.bats`, `shfmt -d -i 4 install.sh tests/install.bats`, and `bats tests/install.bats`.
 The governance suite is `python3 -m unittest discover -s .github/scripts -p 'test_*.py'`.
 CI verifies Linux, macOS, the MSRV, generated command documentation, and scripts.
 
@@ -41,7 +41,7 @@ Dependencies are reviewed changes, not forbidden changes. Keep Cargo.lock, valid
 `--skills agents|claude|all` explicitly synchronizes the selected skill directories.
 `--check-auth` explicitly checks authentication without refresh and suppresses personal output.
 
-Verify the installed binary's help and PATH resolution. When skills are requested, verify their content and report any backup paths. Preserve existing directory permissions, immutable backups, staging and rollback. Do not alter host-agent configuration. Installation never writes the credential store or triggers refresh.
+Verify the installed binary's help and PATH resolution. When skills are requested, verify their content and report any backup paths. Preserve existing directory permissions, immutable backups, staging and rollback. Backups belong in `${XDG_DATA_HOME:-~/.local/share}/askcodex/skill-backups/`, never inside a skills directory, where hosts load them as a second, stale askcodex skill. Do not alter host-agent configuration. Installation never writes the credential store or triggers refresh.
 
 ## Contribution and merge
 
