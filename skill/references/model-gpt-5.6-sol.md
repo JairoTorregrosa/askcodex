@@ -24,7 +24,7 @@ You are about to send one request to `gpt-5.6-sol` with `askcodex ask`. Use it f
 - OpenAI describes GPT-6 Sol as having "stronger factual reliability and clearer communication than GPT-5.6 Sol" ([6]).
 - Probe, `--effort none`: exact JSONL from a 3-line log in 4.1 s, with 128 input and 107 output tokens (observed 2026-09-27).
 - Probe, `--effort medium`, a Python function with 2 planted bugs: it found both plus 3 real ones and closed the connection correctly in its fix. 36.8 s, 1,747 output tokens (observed 2026-09-27).
-- Real-time cyber and biology classifiers can hold the stream for several seconds or block a request ([3]). Codex treats a `cyber_policy` failure as final ([7]). askcodex reports it as `stream_failed`; since 0.3.0 the `--json` and `--events` diagnostic also carries the backend's `response.error` verbatim, so the code is in `error.backend.code` (askcodex `docs/OUTPUT.md`; not provoked live).
+- Real-time cyber and biology classifiers can hold the stream for several seconds or block a request ([3]). Codex treats a `cyber_policy` failure as final ([7]). askcodex reports it as `stream_failed`; since 0.3.0 the `--json` and `--events` diagnostic also carries the code from the backend's `response.error`, in `error.backend.code` (a filtered, bounded copy) (askcodex `docs/OUTPUT.md`; not provoked live).
 
 ## Do this
 

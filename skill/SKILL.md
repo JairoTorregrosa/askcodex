@@ -145,7 +145,10 @@ the user the useful output with its saved path.
   fabricate a result, or silently switch models.
 - With `--json` or `--events`, a failure prints `{schema_version:1,error:{code,message,
   http_status?,backend?}}` on stderr and no success result. Never turn a partial stream into a
-  completed answer. `error.backend` is the backend's own reason, verbatim; act on it:
+  completed answer. `error.backend` carries the backend's own reason, filtered: only `code`,
+  `type`, `param`, `message`, `detail` and `error` (or `incomplete_details.reason`), each cut to
+  400 bytes. When it is absent or reads as cut off, tell the user the full cause could not be read
+  instead of guessing. Act on it:
 
   | The diagnostic says | Cause | Next step |
   |---|---|---|
