@@ -16,7 +16,7 @@ Keep instructions and implementation aligned. Internal modules may change; prese
 
 Use the pinned toolchain in `rust-toolchain.toml`; honor the MSRV in `Cargo.toml`.
 Run `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, and `cargo test --locked`.
-Changes to the installer also require `shellcheck install.sh tests/install.bats`, `shfmt -d install.sh`, and `bats tests/install.bats`.
+Changes to the installer also require `shellcheck install.sh tests/install.bats`, `shfmt -d -i 4 install.sh tests/install.bats`, and `bats tests/install.bats`.
 The governance suite is `python3 -m unittest discover -s .github/scripts -p 'test_*.py'`.
 CI verifies Linux, macOS, the MSRV, generated command documentation, and scripts.
 
