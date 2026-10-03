@@ -423,23 +423,66 @@ old_skill_cross_fs() {
     [ "$(count_entries "$AGENTS")" -eq 1 ]
 }
 
-@test "an interrupted removal leaves a loadable leftover that the next run removes" {
-    old_skill_cross_fs
-    # TERM arrives after the rename to askcodex.leftover.*, before any rm.
-    # shellcheck disable=SC2016  # code for the fake rm, expanded there
-    fake_cmd rm 2 '*/askcodex.leftover.*' 'kill -TERM "$PPID"; exit 1'
+@test "an interrupt after the backup is published leaves nothing loadable, and the next run removes the rest" {
+    # One TERM, once: right after the parked skill becomes askcodex.leftover.*
+    # (its first rm), or in between publishing the backup and that rename.
+    once="[ -e \"$TASK_ROOT/once\" ] || { : >\"$TASK_ROOT/once\"; kill -TERM \"\$PPID\"; exit 1; }"
+    for point in rm mv; do
+        rm -rf "$TASK_HOME/.agents" "$TASK_HOME/.local/share" "$TASK_ROOT/once" "$TASK_ROOT/bin/rm" "$TASK_ROOT/bin/mv"
+        old_skill_cross_fs
+        fake_cmd "$point" 2 '*/askcodex.leftover.*' "$once"
+        invoke --skills agents
+        [ "$status" -eq 143 ]
+        [ "$(cat "$backup/SKILL.md")" = old ]
+        [ "$(cat "$backup/references/notes.md")" = 'old reference' ]
+        # Not loadable, not mistaken for a backup, lock released.
+        [ ! -e "$left/SKILL.md" ]
+        [ -d "$left/references" ]
+        no_backups_beside "$AGENTS"
+        [ ! -e "$AGENTS/askcodex.lock" ]
+        [[ "$output" == *"interrupted: $left no longer loads"* ]]
+        rm "$TASK_ROOT/bin/$point"
+        invoke --skills agents
+        [ "$status" -eq 0 ]
+        [[ "$output" == *"removed $left, left by an earlier run"* ]]
+        [ "$(count_entries "$AGENTS")" -eq 1 ]
+        [ "$(count_entries "$BACKUPS")" -eq 1 ]
+    done
+}
+
+@test "an XDG_DATA_HOME inside a skills directory falls back to the default backup dir" {
+    fake_date
+    mkdir -p "$TASK_HOME/.agents/skills"
+    ln -s .agents/skills "$TASK_HOME/skills-link"
+    for xdg in "$TASK_HOME/.agents/skills" "$TASK_HOME/skills-link" "$TASK_HOME/.claude/skills/data"; do
+        rm -rf "$AGENTS/askcodex" "$TASK_HOME/.local/share"
+        skill_with "$AGENTS/askcodex" old
+        TASK_XDG="$xdg"
+        invoke --skills agents
+        [ "$status" -eq 0 ]
+        [[ "$output" == *"warning: $xdg/askcodex/skill-backups is inside the skills directory"* ]]
+        [ "$(cat "$BACKUPS/agents-$STAMP/SKILL.md")" = old ]
+        cmp "$TASK_REPO/skill/SKILL.md" "$AGENTS/askcodex/SKILL.md"
+        [ "$(count_entries "$AGENTS/askcodex")" -eq 1 ]
+        [ "$(count_entries "$AGENTS")" -eq 1 ]
+        [ ! -e "$TASK_HOME/.claude/skills/data" ]
+        # And it converges.
+        invoke --skills agents
+        [ "$status" -eq 0 ]
+        [[ "$output" == *'already holds exactly this skill'* ]]
+        [ "$(count_entries "$BACKUPS")" -eq 1 ]
+    done
+}
+
+@test "a default backup dir that resolves inside a skills directory refuses before touching skills" {
+    skill_with "$AGENTS/askcodex" old
+    mkdir -p "$TASK_HOME/.local"
+    ln -s ../.agents/skills "$TASK_HOME/.local/share"
     invoke --skills agents
-    [ "$status" -eq 143 ]
-    [ "$(cat "$backup/SKILL.md")" = old ]
-    [ "$(cat "$left/SKILL.md")" = old ]
-    [ ! -e "$AGENTS/askcodex.lock" ]
-    rm "$TASK_ROOT/bin/rm"
-    invoke --skills agents
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"removed $left, left by an earlier run"* ]]
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"the backup directory $BACKUPS is inside the skills directory"* ]]
+    [ "$(cat "$AGENTS/askcodex/SKILL.md")" = old ]
     [ "$(count_entries "$AGENTS")" -eq 1 ]
-    [ "$(count_entries "$BACKUPS")" -eq 1 ]
-    [ "$(cat "$backup/references/notes.md")" = 'old reference' ]
 }
 
 @test "a copy that fails partway publishes nothing, is discarded, and prints no hand-typed retry" {
@@ -521,6 +564,22 @@ old_skill_cross_fs() {
         [ "$(count_entries "$BACKUPS")" -eq 0 ]
     done
     [ "$status" -eq 143 ]
+    # A second TERM while the cleanup puts the skill back must not cut it
+    # short: the skill is restored and the lock released.
+    cat >"$TASK_ROOT/bin/mv" <<SH
+#!/bin/sh
+case "\$1" in
+*/askcodex.new) kill -TERM "\$PPID"; exit 1 ;;
+*/askcodex.bak.*) kill -TERM "\$PPID" ;;
+esac
+exec "$(command -v mv)" "\$@"
+SH
+    invoke --skills agents
+    [ "$status" -eq 143 ]
+    [ "$(cat "$AGENTS/askcodex/SKILL.md")" = old ]
+    [[ "$output" == *"previous skill restored at $AGENTS/askcodex"* ]]
+    [ ! -e "$AGENTS/askcodex.lock" ]
+    no_backups_beside "$AGENTS"
 }
 
 @test "a backup that cannot leave the skills dir is reported loudly, fails the run, and moves on re-run" {

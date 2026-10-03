@@ -154,6 +154,7 @@ MOVED=0
 STRANDED=0
 STASHED=""
 LEFTOVER=""
+DOOMED=""
 
 # Prints the first of $1, $1.1 … $1.99 that does not exist, so a backup is
 # never overwritten and never moved into another backup. Names under
@@ -187,6 +188,15 @@ stranded() {
     printf '       skill. Re-run ./install.sh with the same --skills to retry.\n' >&2
 }
 
+# Removes the top-level SKILL.md of directory $1 (what makes it load as a
+# skill), making the directory writable first if it has to.
+unload() {
+    if [ -d "$1" ] && [ ! -L "$1" ]; then
+        rm -f "$1/SKILL.md" 2>/dev/null ||
+            { chmod u+w "$1" 2>/dev/null && rm -f "$1/SKILL.md" 2>/dev/null; } || :
+    fi
+}
+
 # Removes $1, the renamed source of a backup already complete and verified
 # in $BACKUP_ROOT: askcodex.leftover.* is only ever created after that
 # backup was published, so removing it loses nothing. A top-level SKILL.md is
@@ -196,14 +206,13 @@ stranded() {
 # skill and fails the run; one without is reported and does not.
 finish_leftover() {
     _l="$1"
-    if [ -d "$_l" ] && [ ! -L "$_l" ]; then
-        rm -f "$_l/SKILL.md" 2>/dev/null ||
-            { chmod u+w "$_l" 2>/dev/null && rm -f "$_l/SKILL.md" 2>/dev/null; } || :
-    fi
+    DOOMED="$_l"
+    unload "$_l"
     if ! rm -rf "$_l" 2>/dev/null; then
         chmod -R u+w "$_l" 2>/dev/null || :
         rm -rf "$_l" 2>/dev/null || :
     fi
+    DOOMED=""
     if [ ! -e "$_l" ] && [ ! -L "$_l" ]; then
         return 0
     fi
@@ -242,6 +251,7 @@ same_fs() {
 stash() {
     STASHED=""
     LEFTOVER=""
+    DOOMED=""
     _src="$1"
     if ! _to="$(free_path "$BACKUP_ROOT/$2")"; then
         stranded "$_src"
@@ -263,6 +273,9 @@ stash() {
         [ ! -e "$_to" ] && [ ! -L "$_to" ] &&
         mv "$_tmp" "$_to"; then
         STASHED="$_to"
+        # From here the source is expendable: an interrupt makes the EXIT
+        # trap unload it instead of leaving a stale skill until a re-run.
+        DOOMED="$_src"
     else
         if [ -n "${_tmp:-}" ] && { [ -e "$_tmp" ] || [ -L "$_tmp" ]; }; then
             chmod -R u+w "$_tmp" 2>/dev/null || :
@@ -280,16 +293,43 @@ stash() {
     _doomed="$_src"
     if _left="$(free_path "$DST.leftover.$STAMP")" && mv "$_src" "$_left"; then
         _doomed="$_left"
+        DOOMED="$_left"
     fi
     finish_leftover "$_doomed" || LEFTOVER="$_doomed"
 }
 
 # Leaves the destination as it was found, on every path out of the script:
 # the staging copy is discarded, and a skill parked between the two renames
-# is put back.
+# is put back. A source whose backup was already verified and published
+# (DOOMED) is unloaded rather than left loading beside the new skill: it is
+# renamed to askcodex.leftover.* if it is not yet (so no later sweep takes the
+# unloaded tree for a backup) and loses its top-level SKILL.md; the next
+# run removes the rest. If that rename fails it stays whole, as a sibling
+# backup the next run's sweep moves out.
 cleanup() {
     _status=$?
+    # A second Ctrl-C (or TERM, HUP) must not cut this short: it would skip
+    # putting the parked skill back, unloading a doomed one, or releasing the
+    # lock.
+    trap '' INT TERM HUP
     if [ -n "${LOCKED:-}" ]; then
+        if [ -n "${DOOMED:-}" ] && { [ -e "$DOOMED" ] || [ -L "$DOOMED" ]; }; then
+            case "${DOOMED##*/}" in
+            askcodex.leftover.*) ;;
+            *)
+                if _l="$(free_path "$DST.leftover.$STAMP")" && mv "$DOOMED" "$_l" 2>/dev/null; then
+                    DOOMED="$_l"
+                else
+                    DOOMED=""
+                fi
+                ;;
+            esac
+            if [ -n "$DOOMED" ]; then
+                unload "$DOOMED"
+                say "› interrupted: $DOOMED no longer loads (its backup is complete);"
+                say "  the next run removes it"
+            fi
+        fi
         rm -rf "$STAGE" 2>/dev/null || :
         if [ "$SWAPPED" -eq 0 ] && [ -n "$HELD" ] && [ ! -e "$DST" ] && [ ! -L "$DST" ]; then
             if mv "$HELD" "$DST" 2>/dev/null; then
@@ -333,6 +373,7 @@ wire_skill() {
     HELD=""
     BAK=""
     LEFT=""
+    DOOMED=""
     SAME=0
     SWAPPED=0
     LOCKED=""
@@ -499,6 +540,52 @@ if [ "$WIRE_CLAUDE" -eq 1 ] && [ "$WIRE_AGENTS" -eq 1 ]; then
             ALIAS="$CLAUDE_SKILLS/askcodex"
         fi
     fi
+fi
+
+# Prints $1 with every symlink in its longest existing prefix resolved; the
+# components that do not exist yet are appended as written.
+resolve_path() {
+    _p="$1"
+    _rest=""
+    while [ ! -d "$_p" ]; do
+        _rest="/${_p##*/}$_rest"
+        _p="${_p%/*}"
+        [ -n "$_p" ] || _p=/
+    done
+    _p="$(physical "$_p")" || return 1
+    printf '%s%s\n' "${_p%/}" "$_rest"
+}
+
+# Prints the skills directory that $BACKUP_ROOT is, or lies inside, if any.
+backup_root_conflict() {
+    _root="$(resolve_path "$BACKUP_ROOT")" || die "cannot resolve $BACKUP_ROOT"
+    for _dir in "$CLAUDE_SKILLS" "$AGENTS_SKILLS"; do
+        _p="$(resolve_path "$_dir")" || continue
+        case "$_root/" in "$_p"/*)
+            printf '%s\n' "$_dir"
+            return 0
+            ;;
+        esac
+    done
+}
+
+# An absolute XDG_DATA_HOME can point anywhere, including a skills directory
+# ($HOME/.agents/skills, or a link to it). Backups there would be parked
+# along with the skill they sit in and load as skills themselves. Such a
+# root is replaced by the default, loudly, before anything is touched; if
+# even the default resolves inside a skills directory, nothing is wired.
+if [ "$SKILL_TARGET" != none ]; then
+    CONFLICT="$(backup_root_conflict)"
+    if [ -n "$CONFLICT" ] && [ "$BACKUP_ROOT" != "$HOME/.local/share/askcodex/skill-backups" ]; then
+        say "warning: $BACKUP_ROOT is inside the skills directory"
+        say "         $CONFLICT, where agents would load backups as skills."
+        say "         Using $HOME/.local/share/askcodex/skill-backups instead."
+        BACKUP_ROOT="$HOME/.local/share/askcodex/skill-backups"
+        CONFLICT="$(backup_root_conflict)"
+    fi
+    [ -z "$CONFLICT" ] ||
+        die "the backup directory $BACKUP_ROOT is inside the skills directory
+       $CONFLICT, where agents would load backups as skills. No skill was touched."
 fi
 
 DST1="" BAK1="" SAME1=0 MOVED1=0 LEFT1=""

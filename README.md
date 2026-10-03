@@ -42,8 +42,10 @@ skill untouched. A different one is replaced and backed up to
 `${XDG_DATA_HOME:-~/.local/share}/askcodex/skill-backups/` as
 `agents-<UTC time>` or `claude-<UTC time>`, outside every skills directory:
 agents load each directory there as a skill, so a backup beside the skill would
-load as a stale second copy. Backups that older installers left beside the
-skill (`askcodex.bak*`) are moved there too. No backup is overwritten or
+load as a stale second copy (an `XDG_DATA_HOME` that resolves inside a skills
+directory is replaced by the default, with a warning). Backups that older
+installers left beside the skill (`askcodex.bak*`) are moved there too. No
+backup is overwritten or
 deleted, and the installer prints the rollback command, which copies the
 backup back beside the skill before swapping it in and keeps the backup. When
 `~/.claude/skills` and `~/.agents/skills` are one directory through a symlink,

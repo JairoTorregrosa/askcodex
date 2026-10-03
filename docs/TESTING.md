@@ -98,8 +98,11 @@ finish removing (a leftover that still holds a SKILL.md fails the run), skills
 directories shared through a symlink (wired once, one rollback, including a
 link to a directory not created yet), the printed rollback (it restores a copy,
 keeps the backup, survives a failed copy and a retry) and its refusal when the
-source is gone, restoration after a failed or interrupted swap, idempotence,
-locks, and existing directory permissions. The tests remove any inherited
+source is gone, a backup directory that resolves inside a skills directory
+(fallback or refusal), an interrupt after a backup is published (the parked
+copy stops loading at once), restoration after a failed or interrupted swap
+(also when a second signal arrives during cleanup), idempotence, locks, and
+existing directory permissions. The tests remove any inherited
 `XDG_DATA_HOME`, so a run never writes to the real data directory.
 
 ---
