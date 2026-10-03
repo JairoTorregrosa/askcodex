@@ -155,6 +155,7 @@ STRANDED=0
 STASHED=""
 LEFTOVER=""
 DOOMED=""
+INCOMING=""
 
 # Prints the first of $1, $1.1 … $1.99 that does not exist, so a backup is
 # never overwritten and never moved into another backup. Names under
@@ -267,11 +268,13 @@ stash() {
     # name, verify, publish with a rename inside $BACKUP_ROOT, and only then
     # remove the source. A final name never holds a partial copy, and a
     # failed copy is discarded, never reused.
-    if _tmp="$(free_path "$BACKUP_ROOT/.incoming-$2")" &&
+    # INCOMING names the unpublished copy so the EXIT trap can discard it.
+    if _tmp="$(free_path "$BACKUP_ROOT/.incoming-$2")" && INCOMING="$_tmp" &&
         cp -PRp "$_src" "$_tmp" &&
         diff -r "$_src" "$_tmp" >/dev/null 2>&1 &&
         [ ! -e "$_to" ] && [ ! -L "$_to" ] &&
         mv "$_tmp" "$_to"; then
+        INCOMING=""
         STASHED="$_to"
         # From here the source is expendable: an interrupt makes the EXIT
         # trap unload it instead of leaving a stale skill until a re-run.
@@ -281,6 +284,7 @@ stash() {
             chmod -R u+w "$_tmp" 2>/dev/null || :
             rm -rf "$_tmp" 2>/dev/null || :
         fi
+        INCOMING=""
         stranded "$_src"
         return 0
     fi
@@ -306,6 +310,15 @@ stash() {
 # unloaded tree for a backup) and loses its top-level SKILL.md; the next
 # run removes the rest. If that rename fails it stays whole, as a sibling
 # backup the next run's sweep moves out.
+#
+# A skill parked after the swap whose backup was not yet published (an
+# interrupt during the copy or its verification) is rolled back instead:
+# keeping the new skill would leave two loadable askcodex skills, and
+# unloading the parked one would damage the only copy of it. The partial copy
+# is discarded and the parked skill is swapped back in with two renames; the
+# new skill is dropped, and a re-run installs it again. A parked skill that a
+# finished stash() reported as stranded is not in flight: by then the lock
+# is released and this does not run.
 cleanup() {
     _status=$?
     # A second Ctrl-C (or TERM, HUP) must not cut this short: it would skip
@@ -313,6 +326,11 @@ cleanup() {
     # lock.
     trap '' INT TERM HUP
     if [ -n "${LOCKED:-}" ]; then
+        _unpublished=0
+        if [ "$SWAPPED" -eq 1 ] && [ -n "$HELD" ] && [ -z "${DOOMED:-}" ] &&
+            { [ -e "$HELD" ] || [ -L "$HELD" ]; }; then
+            _unpublished=1
+        fi
         if [ -n "${DOOMED:-}" ] && { [ -e "$DOOMED" ] || [ -L "$DOOMED" ]; }; then
             case "${DOOMED##*/}" in
             askcodex.leftover.*) ;;
@@ -330,6 +348,10 @@ cleanup() {
                 say "  the next run removes it"
             fi
         fi
+        if [ -n "${INCOMING:-}" ] && { [ -e "$INCOMING" ] || [ -L "$INCOMING" ]; }; then
+            chmod -R u+w "$INCOMING" 2>/dev/null || :
+            rm -rf "$INCOMING" 2>/dev/null || :
+        fi
         rm -rf "$STAGE" 2>/dev/null || :
         if [ "$SWAPPED" -eq 0 ] && [ -n "$HELD" ] && [ ! -e "$DST" ] && [ ! -L "$DST" ]; then
             if mv "$HELD" "$DST" 2>/dev/null; then
@@ -337,6 +359,19 @@ cleanup() {
             else
                 printf 'error: could not put the previous skill back at %s;\n' "$DST" >&2
                 printf '       it is at %s\n' "$HELD" >&2
+            fi
+        elif [ "$_unpublished" -eq 1 ]; then
+            if mv "$DST" "$STAGE" 2>/dev/null && mv "$HELD" "$DST" 2>/dev/null; then
+                rm -rf "$STAGE" 2>/dev/null || :
+                say "› interrupted before the previous skill was backed up: it is back"
+                say "  at $DST, and the new one was dropped (re-run to install it)"
+            else
+                if [ ! -e "$DST" ] && [ ! -L "$DST" ]; then
+                    mv "$STAGE" "$DST" 2>/dev/null || :
+                fi
+                printf 'error: interrupted before %s was backed up, and it\n' "$HELD" >&2
+                printf '       could not be swapped back into %s. Re-run ./install.sh\n' "$DST" >&2
+                printf '       with the same --skills; it backs it up and removes it.\n' >&2
             fi
         fi
         rm -f "$LOCK/fs-probe" 2>/dev/null || :

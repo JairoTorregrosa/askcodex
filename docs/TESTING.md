@@ -100,7 +100,8 @@ link to a directory not created yet), the printed rollback (it restores a copy,
 keeps the backup, survives a failed copy and a retry) and its refusal when the
 source is gone, a backup directory that resolves inside a skills directory
 (fallback or refusal), an interrupt after a backup is published (the parked
-copy stops loading at once), restoration after a failed or interrupted swap
+copy stops loading at once) or before (the parked skill is swapped back in
+and the partial copy discarded), restoration after a failed or interrupted swap
 (also when a second signal arrives during cleanup), idempotence, locks, and
 existing directory permissions. The tests remove any inherited
 `XDG_DATA_HOME`, so a run never writes to the real data directory.

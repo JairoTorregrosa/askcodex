@@ -450,6 +450,35 @@ old_skill_cross_fs() {
     done
 }
 
+@test "an interrupt before the backup is published rolls back to the parked skill" {
+    # TERM while the parked skill is copied (a partial tree exists), or while
+    # the copy is verified. Either way no backup exists yet.
+    # shellcheck disable=SC2016  # code for the fake cp and diff, expanded there
+    for point in cp diff; do
+        rm -rf "$TASK_HOME/.agents" "$TASK_HOME/.local/share" "$TASK_ROOT/bin/cp" "$TASK_ROOT/bin/diff"
+        old_skill_cross_fs
+        if [ "$point" = cp ]; then
+            fake_cmd cp 3 '*/.incoming-*' 'mkdir -p "$3/references"; kill -TERM "$PPID"; exit 1'
+        else
+            fake_cmd diff 3 '*/.incoming-*' 'kill -TERM "$PPID"; exit 1'
+        fi
+        invoke --skills agents
+        [ "$status" -eq 143 ]
+        # One loadable skill, the old one, complete; nothing parked or partial.
+        [ "$(cat "$AGENTS/askcodex/SKILL.md")" = old ]
+        [ "$(cat "$AGENTS/askcodex/references/notes.md")" = 'old reference' ]
+        [ "$(count_entries "$AGENTS")" -eq 1 ]
+        [ "$(count_entries "$BACKUPS")" -eq 0 ]
+        [[ "$output" == *"interrupted before the previous skill was backed up: it is back"* ]]
+        rm "$TASK_ROOT/bin/$point"
+        invoke --skills agents
+        [ "$status" -eq 0 ]
+        cmp "$TASK_REPO/skill/SKILL.md" "$AGENTS/askcodex/SKILL.md"
+        [ "$(cat "$backup/references/notes.md")" = 'old reference' ]
+        [ "$(count_entries "$AGENTS")" -eq 1 ]
+    done
+}
+
 @test "an XDG_DATA_HOME inside a skills directory falls back to the default backup dir" {
     fake_date
     mkdir -p "$TASK_HOME/.agents/skills"
