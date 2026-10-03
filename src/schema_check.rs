@@ -76,29 +76,32 @@ fn same(a: &Value, b: &Value) -> bool {
     }
 }
 
-/// Integers compare exactly; anything else (a fraction, or an integer next
-/// to a float such as `1` and `1.0`) compares as f64.
+/// JSON-Schema numeric equality: by value, so `1` equals `1.0`.
 fn same_number(a: &serde_json::Number, b: &serde_json::Number) -> bool {
-    if let (Some(x), Some(y)) = (a.as_i64(), b.as_i64()) {
-        return x == y;
+    compare_numbers(a, b) == Some(std::cmp::Ordering::Equal)
+}
+
+/// A JSON number as an exact integer, when it is one: i64/u64 literals,
+/// and floats with no fraction (every f64 beyond 2^53 is one) that fit.
+fn as_exact_integer(n: &serde_json::Number) -> Option<i128> {
+    if let Some(i) = n.as_i64() {
+        return Some(i128::from(i));
     }
-    if let (Some(x), Some(y)) = (a.as_u64(), b.as_u64()) {
-        return x == y;
+    if let Some(u) = n.as_u64() {
+        return Some(i128::from(u));
     }
-    matches!((a.as_f64(), b.as_f64()), (Some(x), Some(y)) if x == y)
+    let f = n.as_f64()?;
+    (f.fract() == 0.0 && f.abs() < 1e38).then_some(f as i128)
 }
 
 /// Order two numbers without rounding whole numbers through f64: above
 /// 2^53 distinct integers share an f64, so `18446744073709551615` would
-/// compare equal to `18446744073709551614`.
+/// compare equal to `18446744073709551614`, and `9007199254740993` to
+/// `9007199254740992.0`. Only a pair with a real fraction compares as f64,
+/// and fractions exist only below 2^53, where f64 holds integers exactly.
 fn compare_numbers(a: &serde_json::Number, b: &serde_json::Number) -> Option<std::cmp::Ordering> {
-    use std::cmp::Ordering::{Greater, Less};
-    match (a.as_i64(), a.as_u64(), b.as_i64(), b.as_u64()) {
-        (Some(x), _, Some(y), _) => Some(x.cmp(&y)),
-        (_, Some(x), _, Some(y)) => Some(x.cmp(&y)),
-        // A negative i64 against a u64 beyond i64::MAX, and vice versa.
-        (Some(_), None, None, Some(_)) => Some(Less),
-        (None, Some(_), Some(_), None) => Some(Greater),
+    match (as_exact_integer(a), as_exact_integer(b)) {
+        (Some(x), Some(y)) => Some(x.cmp(&y)),
         _ => a.as_f64()?.partial_cmp(&b.as_f64()?),
     }
 }
@@ -460,6 +463,17 @@ mod tests {
         assert!(check(&schema, &json!(18446744073709551615u64)).is_ok());
         assert!(check(&json!({"minimum": 0.5}), &json!(0)).is_err());
         assert!(check(&json!({"maximum": 2}), &json!(2.0)).is_ok());
+        // Mixed integer/float equality is exact too.
+        let pinned = json!({"const": 9007199254740992.0});
+        assert!(check(&pinned, &json!(9007199254740993u64)).is_err());
+        assert!(
+            check(
+                &json!({"enum": [9007199254740992.0]}),
+                &json!(9007199254740992u64)
+            )
+            .is_ok()
+        );
+        assert!(check(&json!({"const": 1.5}), &json!(1.5)).is_ok());
     }
 
     #[test]

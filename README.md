@@ -142,9 +142,9 @@ Semantic commands with `--json` print one versioned document on success:
 field holding the original response of `usage`, `models` and `transcribe`;
 backend fields are not a stable askcodex schema, and since 0.3.0 they are
 opt-in because the model catalog alone is about 700 KB. A failed call prints a
-JSON diagnostic on stderr whose `error.backend` carries the backend's own
-error object (for example `code: "unsupported_value"`, `param:
-"reasoning.effort"`). Use these paths in scripts:
+JSON diagnostic on stderr whose `error.backend` carries the actionable fields
+of the backend's own error object (for example `code: "unsupported_value"`,
+`param: "reasoning.effort"`), and nothing else it sent. Use these paths in scripts:
 
 ```sh
 askcodex ask - --json < brief.txt > answer.json

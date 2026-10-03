@@ -182,12 +182,14 @@ fn consume_stream<R: BufRead>(
 fn stream_failure(raw: &Value) -> Error {
     let kind = raw.get("type").and_then(Value::as_str).unwrap_or("?");
     let backend = if kind == "response.incomplete" {
-        let details = raw
+        // Only the reason: the rest of the details object is not ours to log.
+        let reason = raw
             .get("response")
             .and_then(|response| response.get("incomplete_details"))
+            .and_then(|details| details.get("reason"))
             .cloned()
             .unwrap_or(Value::Null);
-        Some(serde_json::json!({ "incomplete_details": details }))
+        Some(serde_json::json!({ "incomplete_details": { "reason": reason } }))
     } else {
         crate::error::backend_error_detail(raw)
     };

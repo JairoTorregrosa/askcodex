@@ -386,12 +386,14 @@ Extra headers: `OpenAI-Beta: responses=experimental`, `Accept: text/event-stream
 Strict enforcement is a dated observation, so askcodex re-checks each `--schema` answer's structure
 locally (`src/schema_check.rs`) and fails with `response_invalid` on a mismatch.
 
-Since 0.3.0 the machine error diagnostic carries `http_status` and the backend's error object as
-`backend` (OUTPUT.md). Codex treats `response.incomplete` as terminal (interrupted) and maps
+Since 0.3.0 the machine error diagnostic carries `http_status` and an allowlist of the backend's
+error fields (`code`, `type`, `param`, `message`, `detail`, each cut to 400 bytes) as `backend`
+(OUTPUT.md). Codex treats `response.incomplete` as terminal (interrupted) and maps
 `response.failed` codes such as `context_length_exceeded`, `insufficient_quota`, `cyber_policy`
 and `invalid_prompt` to distinct errors `[verified-source 2026-10-02:
 codex-rs/codex-api/src/sse/responses.rs at rust-v0.160.0]`; askcodex fails on both events with
-`stream_failed` and passes `response.error` / `incomplete_details` through as `backend`
+`stream_failed` and passes the actionable fields of `response.error` (or the
+`incomplete_details.reason`) through as `backend`
 `[UNVERIFIED live: neither event was provoked]`.
 
 ---

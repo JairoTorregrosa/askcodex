@@ -233,22 +233,46 @@ pub enum Error {
     },
 }
 
-/// The backend's own error object out of an error document: the `error`
+/// The backend's own error fields out of an error document: from the `error`
 /// object when there is one (`{"error": {"code", "param", ...}}`, and the
 /// `response.error` of a `response.failed` event), otherwise the document
-/// itself when it is an object (`{"detail": "..."}`). Verbatim, never
-/// reshaped; `None` for anything else.
+/// itself when it is an object (`{"detail": "..."}`), reduced to
+/// [`diagnostic_fields`]; `None` for anything else.
 pub fn backend_error_detail(document: &serde_json::Value) -> Option<serde_json::Value> {
     let nested = document
         .get("response")
         .and_then(|response| response.get("error"))
         .or_else(|| document.get("error"))
         .filter(|error| error.is_object());
-    match nested {
-        Some(error) => Some(error.clone()),
-        None if document.is_object() => Some(document.clone()),
-        None => None,
+    diagnostic_fields(nested.unwrap_or(document))
+}
+
+/// The keys of a backend error object that tell a caller what to do, and
+/// nothing else: an error body can echo a prompt, schema data or account
+/// fields, and agent runners keep stderr. Strings are cut to
+/// `config::ERROR_SNIPPET_BYTES`, the bound the message already has.
+/// `None` when none of them is present.
+pub fn diagnostic_fields(object: &serde_json::Value) -> Option<serde_json::Value> {
+    const KEYS: [&str; 6] = ["code", "type", "param", "message", "detail", "error"];
+    let object = object.as_object()?;
+    let mut kept = serde_json::Map::new();
+    for key in KEYS {
+        let value = match object.get(key) {
+            Some(serde_json::Value::String(text)) => {
+                let mut end = text.len().min(crate::config::ERROR_SNIPPET_BYTES);
+                while !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                serde_json::Value::String(text[..end].to_string())
+            }
+            Some(scalar @ (serde_json::Value::Number(_) | serde_json::Value::Bool(_))) => {
+                scalar.clone()
+            }
+            _ => continue,
+        };
+        kept.insert(key.to_string(), value);
     }
+    (!kept.is_empty()).then_some(serde_json::Value::Object(kept))
 }
 
 impl Error {
@@ -339,10 +363,22 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn backend_error_detail_takes_the_error_object_verbatim() {
+    fn backend_error_detail_keeps_only_the_actionable_fields() {
         let nested =
             json!({"error": {"code": "invalid_json_schema", "param": "text.format.schema"}});
         assert_eq!(backend_error_detail(&nested), Some(nested["error"].clone()));
+        // Anything else an error body carries stays out of stderr.
+        let chatty = json!({"error": {"code": "c", "message": "m".repeat(5000),
+                                      "prompt": "PRIVATE", "account_id": "acct_x",
+                                      "schema": {"x": 1}}});
+        let kept = backend_error_detail(&chatty).unwrap();
+        let keys: Vec<_> = kept.as_object().unwrap().keys().cloned().collect();
+        assert_eq!(keys, ["code", "message"]);
+        assert_eq!(
+            kept["message"].as_str().unwrap().len(),
+            crate::config::ERROR_SNIPPET_BYTES
+        );
+        assert!(!kept.to_string().contains("PRIVATE"));
         let failed = json!({"type": "response.failed", "response": {"error": {"code": "c"}}});
         assert_eq!(backend_error_detail(&failed), Some(json!({"code": "c"})));
         // `{"detail": ...}` is the shape of an unknown-model rejection.
@@ -351,6 +387,7 @@ mod tests {
         // A string `error` is not an error object; the document is kept whole.
         let flat = json!({"error": "rate limited"});
         assert_eq!(backend_error_detail(&flat), Some(flat.clone()));
+        assert_eq!(backend_error_detail(&json!({"id": "resp_x"})), None);
         assert_eq!(backend_error_detail(&json!("text")), None);
         assert_eq!(backend_error_detail(&json!([1])), None);
     }
