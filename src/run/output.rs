@@ -237,10 +237,10 @@ fn parse_structured_answer(text: &str, schema: &Value) -> Result<Value, Error> {
             ExactJsonError::Syntax(source) => format!(
                 "--schema answer is not valid JSON ({source}; {chars} characters, not quoted)"
             ),
-            ExactJsonError::LossyInteger => format!(
-                "--schema answer holds an integer beyond the 64-bit range, which result.json \
-                 cannot carry exactly ({chars} characters, not quoted); type such fields as \
-                 strings in the schema"
+            ExactJsonError::LossyNumber => format!(
+                "--schema answer holds a number result.json cannot carry exactly (an integer \
+                 beyond 64 bits or a decimal finer than a double; {chars} characters, not \
+                 quoted); type such fields as strings in the schema"
             ),
         },
     })?;

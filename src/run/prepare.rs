@@ -159,8 +159,8 @@ pub(super) fn read_schema(path: &Path) -> Result<Value, Error> {
         }),
         Err(ExactJsonError::Syntax(source)) => Err(Error::Json(source)),
         // Sent as is, the constraint would reach the backend rounded.
-        Err(ExactJsonError::LossyInteger) => Err(Error::InvalidInput {
-            reason: "--schema holds an integer beyond the 64-bit range, which would be sent rounded",
+        Err(ExactJsonError::LossyNumber) => Err(Error::InvalidInput {
+            reason: "--schema holds a number (an integer beyond 64 bits or a decimal finer than a double) that would be sent rounded",
         }),
     }
 }
