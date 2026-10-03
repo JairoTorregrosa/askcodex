@@ -93,6 +93,15 @@ skill_with() {
     printf '%s\n' "$2" >"$1/SKILL.md"
 }
 
+# The rollback the installer must print for destination $1 and backup $2:
+# copy beside the skill, swap with two renames, keep the backup.
+restore_cmd() {
+    local r="$1.restore"
+    printf 'rm -rf "%s" && mkdir "%s" && cp -PRp "%s" "%s/askcodex" && ' "$r" "$r" "$2" "$r"
+    printf '{ [ ! -e "%s" ] && [ ! -L "%s" ] || mv "%s" "%s/replaced"; } && ' "$1" "$1" "$1" "$r"
+    printf 'mv "%s/askcodex" "%s" && rm -rf "%s"' "$r" "$1" "$r"
+}
+
 @test "default installs without credentials or skill writes" {
     invoke
     [ "$status" -eq 0 ]
@@ -159,10 +168,68 @@ skill_with() {
     [[ "$output" == *"previous skill backed up to $backup"* ]]
     [[ "$output" == *"backup : $backup"* ]]
     rollback="$(printf '%s\n' "$output" | sed -n "s|^  rollback: \(.*$AGENTS.*\)|\1|p")"
-    [ "$rollback" = "rm -rf \"$AGENTS/askcodex\" && mv \"$backup\" \"$AGENTS/askcodex\"" ]
+    [ "$rollback" = "$(restore_cmd "$AGENTS/askcodex" "$backup")" ]
     sh -c "$rollback"
     [ "$(cat "$AGENTS/askcodex/SKILL.md")" = old ]
     [ "$(cat "$AGENTS/askcodex/references/notes.md")" = 'old reference' ]
+    # The backup stays, and the swap leaves nothing behind.
+    [ "$(cat "$backup/SKILL.md")" = old ]
+    [ "$(cat "$backup/references/notes.md")" = 'old reference' ]
+    [ "$(count_entries "$AGENTS")" -eq 1 ]
+}
+
+@test "the printed rollback never deletes the working skill before a complete copy exists" {
+    fake_date
+    skill_with "$AGENTS/askcodex" old
+    mkdir -p "$AGENTS/askcodex/references"
+    printf 'old reference\n' >"$AGENTS/askcodex/references/notes.md"
+    invoke --skills agents
+    [ "$status" -eq 0 ]
+    backup="$BACKUPS/agents-$STAMP"
+    rollback="$(printf '%s\n' "$output" | sed -n 's/^  rollback: //p')"
+    # Out of space during the copy: a partial tree, then failure.
+    # shellcheck disable=SC2016  # code for the fake cp, expanded there
+    fake_cmd cp 3 '*/askcodex.restore/askcodex' 'mkdir -p "$3/references"; exit 1'
+    run env PATH="$TASK_ROOT/bin:$PATH" sh -c "$rollback"
+    [ "$status" -ne 0 ]
+    cmp "$TASK_REPO/skill/SKILL.md" "$AGENTS/askcodex/SKILL.md"
+    [ "$(cat "$backup/references/notes.md")" = 'old reference' ]
+    # A retry starts from an empty staging dir: nothing nests in the partial.
+    rm "$TASK_ROOT/bin/cp"
+    sh -c "$rollback"
+    [ "$(cat "$AGENTS/askcodex/SKILL.md")" = old ]
+    [ "$(cat "$AGENTS/askcodex/references/notes.md")" = 'old reference' ]
+    [ ! -e "$AGENTS/askcodex/askcodex" ]
+    [ "$(count_entries "$AGENTS")" -eq 1 ]
+    [ "$(cat "$backup/SKILL.md")" = old ]
+    # An attempt that stopped between the two renames: the skill is gone
+    # and both trees sit in the staging dir. The same command finishes.
+    mkdir -p "$AGENTS/askcodex.restore"
+    mv "$AGENTS/askcodex" "$AGENTS/askcodex.restore/replaced"
+    skill_with "$AGENTS/askcodex.restore/askcodex" partial
+    sh -c "$rollback"
+    [ "$(cat "$AGENTS/askcodex/SKILL.md")" = old ]
+    [ "$(count_entries "$AGENTS")" -eq 1 ]
+    [ "$(cat "$backup/SKILL.md")" = old ]
+}
+
+@test "a skills dir linked to one that does not exist yet is created through the real path" {
+    for link in agents claude; do
+        rm -rf "$TASK_HOME/.agents" "$TASK_HOME/.claude"
+        if [ "$link" = agents ]; then real=claude; else real=agents; fi
+        mkdir -p "$TASK_HOME/.$link"
+        ln -s "../.$real/skills" "$TASK_HOME/.$link/skills"
+        invoke --skills "$link"
+        [ "$status" -ne 0 ]
+        [[ "$output" == *"$TASK_HOME/.$link/skills is a symlink to a directory that does not exist"* ]]
+        [ ! -e "$TASK_HOME/.$real" ]
+        invoke --skills all
+        [ "$status" -eq 0 ]
+        [ -L "$TASK_HOME/.$link/skills" ]
+        cmp "$TASK_REPO/skill/SKILL.md" "$TASK_HOME/.$real/skills/askcodex/SKILL.md"
+        [[ "$output" == *"skill  : $TASK_HOME/.$link/skills/askcodex"$'\n'"           is that same directory through a symlink"* ]]
+        [ "$(count_entries "$TASK_HOME/.$real/skills")" -eq 1 ]
+    done
 }
 
 @test "backups older installers left beside the skill are moved out and nothing else is touched" {
@@ -228,10 +295,11 @@ skill_with() {
     held="$AGENTS/askcodex.bak.$STAMP"
     [ "$(cat "$held/SKILL.md")" = old ]
     rollback="$(printf '%s\n' "$output" | sed -n 's/^  rollback: //p')"
-    [ "$rollback" = "rm -rf \"$AGENTS/askcodex\" && mv \"$held\" \"$AGENTS/askcodex\"" ]
+    [ "$rollback" = "$(restore_cmd "$AGENTS/askcodex" "$held")" ]
     rm "$TASK_ROOT/bin/mv"
     sh -c "$rollback"
     [ "$(cat "$AGENTS/askcodex/SKILL.md")" = old ]
+    [ "$(cat "$held/SKILL.md")" = old ]
 }
 
 @test "a rollback whose source is gone at the end of the run is never printed" {
@@ -323,7 +391,7 @@ old_skill_cross_fs() {
     [[ "$output" == *"warning: could not remove all of $left. It holds no SKILL.md"* ]]
     [[ "$output" == *"leftover: $left  (incomplete; not a backup"* ]]
     rollback="$(printf '%s\n' "$output" | sed -n 's/^  rollback: //p')"
-    [ "$rollback" = "rm -rf \"$AGENTS/askcodex\" && mv \"$backup\" \"$AGENTS/askcodex\"" ]
+    [ "$rollback" = "$(restore_cmd "$AGENTS/askcodex" "$backup")" ]
     # A later run finishes the removal and never takes it for a backup.
     rm "$TASK_ROOT/bin/rm"
     invoke --skills agents
@@ -393,7 +461,7 @@ old_skill_cross_fs() {
     [[ "$output" == *"error: could not back up $held"* ]]
     [[ "$output" == *'Re-run ./install.sh with the same --skills to retry'* ]]
     [[ "$output" != *"mv \"$held\" \"$BACKUPS"* ]]
-    [[ "$output" == *"rollback: rm -rf \"$AGENTS/askcodex\" && mv \"$held\" \"$AGENTS/askcodex\""* ]]
+    [[ "$output" == *"rollback: $(restore_cmd "$AGENTS/askcodex" "$held")"* ]]
     rm "$TASK_ROOT/bin/cp"
     invoke --skills agents
     [ "$status" -eq 0 ]
@@ -472,7 +540,7 @@ old_skill_cross_fs() {
         [[ "$output" == *"error: could not back up $held"* ]]
         [[ "$output" == *"into $BACKUPS. It is intact"* ]]
         [[ "$output" != *"mv \"$held\" \"$BACKUPS"* ]]
-        [[ "$output" == *"rollback: rm -rf \"$AGENTS/askcodex\" && mv \"$held\" \"$AGENTS/askcodex\""* ]]
+        [[ "$output" == *"rollback: $(restore_cmd "$AGENTS/askcodex" "$held")"* ]]
         [[ "$output" == *'1 askcodex backup(s) or leftover(s) are still inside a skills directory'* ]]
         rm "$TASK_ROOT/bin/mv"
         invoke --skills agents

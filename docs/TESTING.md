@@ -95,9 +95,11 @@ the cross-filesystem copy, verify, publish and remove path (selected by
 refusing the installer's hard-link probe), partial copies that are never
 reused, leftovers that are never offered as a rollback and that later runs
 finish removing (a leftover that still holds a SKILL.md fails the run), skills
-directories shared through a symlink (wired once, one rollback), the printed
-rollback and its refusal when the source is gone, restoration after a failed
-or interrupted swap, idempotence, locks, and existing directory permissions. The tests remove any inherited
+directories shared through a symlink (wired once, one rollback, including a
+link to a directory not created yet), the printed rollback (it restores a copy,
+keeps the backup, survives a failed copy and a retry) and its refusal when the
+source is gone, restoration after a failed or interrupted swap, idempotence,
+locks, and existing directory permissions. The tests remove any inherited
 `XDG_DATA_HOME`, so a run never writes to the real data directory.
 
 ---

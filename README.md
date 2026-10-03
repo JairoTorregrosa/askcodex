@@ -44,7 +44,8 @@ skill untouched. A different one is replaced and backed up to
 agents load each directory there as a skill, so a backup beside the skill would
 load as a stale second copy. Backups that older installers left beside the
 skill (`askcodex.bak*`) are moved there too. No backup is overwritten or
-deleted, and the installer prints the rollback command. When
+deleted, and the installer prints the rollback command, which copies the
+backup back beside the skill before swapping it in and keeps the backup. When
 `~/.claude/skills` and `~/.agents/skills` are one directory through a symlink,
 `--skills all` installs it once and prints one rollback. `--check-auth`
 suppresses account details in installer output. A prebuilt binary can also be downloaded from

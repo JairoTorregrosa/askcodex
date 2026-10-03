@@ -309,6 +309,18 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 
+# Makes sure skills directory $1 exists. mkdir -p cannot create through a
+# symlink whose target is missing (it reports "File exists"), so a dangling
+# link gets a message that names the cause instead of "cannot create".
+ensure_skills_dir() {
+    [ ! -d "$1" ] || return 0
+    if [ -L "$1" ] && [ ! -e "$1" ]; then
+        die "$1 is a symlink to a directory that does not exist. Create that
+       directory or remove the link, then re-run."
+    fi
+    mkdir -p "$1" || die "cannot create $1"
+}
+
 # Wire the repo's skill/ into $1/askcodex with staging, locking, and backups
 # named after $2 (claude or agents). Leaves per-destination results in
 # DST/BAK/SAME/MOVED for the caller to report.
@@ -329,7 +341,7 @@ wire_skill() {
 
     # Every path this function creates under $SKILLS matches askcodex*, the
     # surface declared in the header and in AGENTS.md — the lock included.
-    mkdir -p "$SKILLS" || die "cannot create $SKILLS"
+    ensure_skills_dir "$SKILLS"
 
     # mkdir is the atomic test-and-set: two overlapping runs must not race
     # over the backup, or one of them deletes the only copy of the user's
@@ -465,12 +477,17 @@ physical() { (CDPATH='' cd -P -- "$1" 2>/dev/null && pwd -P); }
 # Wiring one physical directory twice lets the second pass sweep up what the
 # first pass parked or reported, and the first pass's rollback would then
 # name a path that no longer exists. A shared directory is wired once,
-# through the path that is not the link, and reported once. ~/.agents/skills
-# is created first so a link pointing at it is not dangling.
+# through the path that is not the link, and reported once. Whichever of the
+# two is not a symlink is created first, in either direction, so a link to
+# a directory that does not exist yet stops dangling before it is used.
 ALIAS=""
 if [ "$WIRE_CLAUDE" -eq 1 ] && [ "$WIRE_AGENTS" -eq 1 ]; then
-    mkdir -p "$AGENTS_SKILLS" || die "cannot create $AGENTS_SKILLS"
-    mkdir -p "$CLAUDE_SKILLS" || die "cannot create $CLAUDE_SKILLS"
+    for _dir in "$AGENTS_SKILLS" "$CLAUDE_SKILLS"; do
+        [ -L "$_dir" ] || ensure_skills_dir "$_dir"
+    done
+    for _dir in "$AGENTS_SKILLS" "$CLAUDE_SKILLS"; do
+        [ ! -L "$_dir" ] || ensure_skills_dir "$_dir"
+    done
     P_CLAUDE="$(physical "$CLAUDE_SKILLS")" || die "cannot resolve $CLAUDE_SKILLS"
     P_AGENTS="$(physical "$AGENTS_SKILLS")" || die "cannot resolve $AGENTS_SKILLS"
     if [ "$P_CLAUDE" = "$P_AGENTS" ]; then
@@ -537,8 +554,19 @@ report_skill() {
     _left="$5"
     say "  skill  : $_dst"
     if [ -n "$_bak" ] && { [ -e "$_bak" ] || [ -L "$_bak" ]; }; then
+        # The rollback restores a copy and keeps the backup. The working
+        # skill is never deleted first: the backup is copied (possibly
+        # across filesystems, where it can run out of space or be
+        # interrupted) into $_dst.restore/askcodex, and only then do two
+        # renames inside the skills dir swap it in. $_dst.restore never
+        # holds a top-level SKILL.md, so hosts never load it, and it is
+        # emptied first, so a retry never copies into a partial tree. If
+        # $_dst is already gone (an earlier attempt stopped between the
+        # renames), the swap goes on without it.
+        _r="$_dst.restore"
         say "  backup : $_bak"
-        say "  rollback: rm -rf \"$_dst\" && mv \"$_bak\" \"$_dst\""
+        say "  rollback: rm -rf \"$_r\" && mkdir \"$_r\" && cp -PRp \"$_bak\" \"$_r/askcodex\" && { [ ! -e \"$_dst\" ] && [ ! -L \"$_dst\" ] || mv \"$_dst\" \"$_r/replaced\"; } && mv \"$_r/askcodex\" \"$_dst\" && rm -rf \"$_r\""
+        say "            (copies the backup beside the skill, then swaps it in; the backup stays)"
     elif [ -n "$_bak" ]; then
         # Never print a rollback whose source is gone: running it would
         # delete the installed skill and then fail to restore anything.
