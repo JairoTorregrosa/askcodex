@@ -2094,10 +2094,22 @@ fn png_facts_read_the_file_not_the_backends_claims() {
     with_trns.extend(chunk(b"tRNS", &[0]));
     with_trns.extend(chunk(b"IDAT", &[]));
     assert_eq!(png_facts(&with_trns).map(|f| f.alpha_channel), Some(true));
-    let mut without = palette;
+    let mut without = palette.clone();
     without.extend(chunk(b"PLTE", &[0, 0, 0]));
     without.extend(chunk(b"IDAT", &[]));
     assert_eq!(png_facts(&without).map(|f| f.alpha_channel), Some(false));
+    // Gray and truecolor images carry simple transparency the same way.
+    for color_type in [0u8, 2] {
+        let mut keyed = palette.clone();
+        keyed[25] = color_type;
+        keyed.extend(chunk(b"tRNS", &[0, 0, 0, 0, 0, 0]));
+        keyed.extend(chunk(b"IDAT", &[]));
+        assert_eq!(
+            png_facts(&keyed).map(|f| f.alpha_channel),
+            Some(true),
+            "color type {color_type}"
+        );
+    }
     // No IHDR: unknown, never zeros.
     assert_eq!(png_facts(&png_fixture()), None);
 }

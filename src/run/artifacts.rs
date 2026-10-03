@@ -121,8 +121,9 @@ pub(super) fn save_image(
 pub(super) struct PngFacts {
     pub width: u32,
     pub height: u32,
-    /// The PNG can carry transparency (RGBA, gray+alpha, or a palette with
-    /// `tRNS`). It does not say how many pixels are actually transparent.
+    /// The PNG can carry transparency (RGBA, gray+alpha, or a gray,
+    /// truecolor or palette image with `tRNS`). It does not say how many
+    /// pixels are actually transparent.
     pub alpha_channel: bool,
 }
 
@@ -135,10 +136,11 @@ pub(super) fn png_facts(png: &[u8]) -> Option<PngFacts> {
     }
     let width = u32::from_be_bytes(ihdr[8..12].try_into().ok()?);
     let height = u32::from_be_bytes(ihdr[12..16].try_into().ok()?);
+    // Gray, truecolor and palette images can all carry simple transparency
+    // in a `tRNS` chunk; only gray+alpha and RGBA always have a channel.
     let alpha_channel = match ihdr[17] {
         4 | 6 => true,
-        0 | 2 => false,
-        3 => palette_has_trns(png)?,
+        0 | 2 | 3 => has_trns(png)?,
         _ => return None,
     };
     Some(PngFacts {
@@ -149,7 +151,7 @@ pub(super) fn png_facts(png: &[u8]) -> Option<PngFacts> {
 }
 
 /// Walk the chunks after IHDR until the image data starts.
-fn palette_has_trns(png: &[u8]) -> Option<bool> {
+fn has_trns(png: &[u8]) -> Option<bool> {
     let mut at = 8;
     loop {
         let len = u32::from_be_bytes(png.get(at..at + 4)?.try_into().ok()?) as usize;

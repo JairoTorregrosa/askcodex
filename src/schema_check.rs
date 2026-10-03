@@ -88,6 +88,21 @@ fn same_number(a: &serde_json::Number, b: &serde_json::Number) -> bool {
     matches!((a.as_f64(), b.as_f64()), (Some(x), Some(y)) if x == y)
 }
 
+/// Order two numbers without rounding whole numbers through f64: above
+/// 2^53 distinct integers share an f64, so `18446744073709551615` would
+/// compare equal to `18446744073709551614`.
+fn compare_numbers(a: &serde_json::Number, b: &serde_json::Number) -> Option<std::cmp::Ordering> {
+    use std::cmp::Ordering::{Greater, Less};
+    match (a.as_i64(), a.as_u64(), b.as_i64(), b.as_u64()) {
+        (Some(x), _, Some(y), _) => Some(x.cmp(&y)),
+        (_, Some(x), _, Some(y)) => Some(x.cmp(&y)),
+        // A negative i64 against a u64 beyond i64::MAX, and vice versa.
+        (Some(_), None, None, Some(_)) => Some(Less),
+        (None, Some(_), Some(_), None) => Some(Greater),
+        _ => a.as_f64()?.partial_cmp(&b.as_f64()?),
+    }
+}
+
 fn is_type(value: &Value, name: &str) -> bool {
     match name {
         "null" => value.is_null(),
@@ -237,21 +252,27 @@ impl Checker<'_> {
         value: &Value,
         at: &str,
     ) -> Result<(), Violation> {
-        let bound = |key| schema.get(key).and_then(Value::as_f64);
-        if let Some(number) = value.as_f64() {
-            if bound("minimum").is_some_and(|min| number < min) {
+        use std::cmp::Ordering::{Greater, Less};
+        if let Value::Number(number) = value {
+            // `None` (no bound, or a bound that is not a number) passes.
+            let against = |key| match schema.get(key) {
+                Some(Value::Number(bound)) => compare_numbers(number, bound),
+                _ => None,
+            };
+            if against("minimum") == Some(Less) {
                 return fail(at, "number is below minimum");
             }
-            if bound("maximum").is_some_and(|max| number > max) {
+            if against("maximum") == Some(Greater) {
                 return fail(at, "number is above maximum");
             }
-            if bound("exclusiveMinimum").is_some_and(|min| number <= min) {
+            if against("exclusiveMinimum").is_some_and(|o| o != Greater) {
                 return fail(at, "number is not above exclusiveMinimum");
             }
-            if bound("exclusiveMaximum").is_some_and(|max| number >= max) {
+            if against("exclusiveMaximum").is_some_and(|o| o != Less) {
                 return fail(at, "number is not below exclusiveMaximum");
             }
         }
+        let bound = |key| schema.get(key).and_then(Value::as_f64);
         if let Some(text) = value.as_str() {
             let length = text.chars().count() as f64;
             if bound("minLength").is_some_and(|min| length < min) {
@@ -427,6 +448,18 @@ mod tests {
         assert!(check(&json!(false), &json!(1)).is_err());
         assert!(check(&json!(true), &json!(1)).is_ok());
         assert!(check(&json!({"const": 1}), &json!(1.0)).is_ok());
+    }
+
+    #[test]
+    fn numeric_bounds_compare_wide_integers_exactly() {
+        let schema = json!({"type": "integer", "maximum": 18446744073709551614u64});
+        assert!(check(&schema, &json!(18446744073709551615u64)).is_err());
+        assert!(check(&schema, &json!(18446744073709551614u64)).is_ok());
+        let schema = json!({"exclusiveMinimum": -9223372036854775807i64});
+        assert!(check(&schema, &json!(-9223372036854775808i64)).is_err());
+        assert!(check(&schema, &json!(18446744073709551615u64)).is_ok());
+        assert!(check(&json!({"minimum": 0.5}), &json!(0)).is_err());
+        assert!(check(&json!({"maximum": 2}), &json!(2.0)).is_ok());
     }
 
     #[test]
