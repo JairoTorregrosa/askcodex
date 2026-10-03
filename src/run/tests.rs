@@ -2112,6 +2112,10 @@ fn png_facts_read_the_file_not_the_backends_claims() {
     }
     // No IHDR: unknown, never zeros.
     assert_eq!(png_facts(&png_fixture()), None);
+    // A broken signature tail is not a PNG, whatever follows it.
+    let mut forged = TINY_RGBA_PNG;
+    forged[6] = b'X';
+    assert_eq!(png_facts(&forged), None);
     // A zero dimension is not an image either.
     let mut empty = TINY_RGBA_PNG;
     empty[16..20].copy_from_slice(&[0, 0, 0, 0]);

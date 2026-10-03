@@ -129,8 +129,13 @@ pub(super) struct PngFacts {
 
 /// `None` when the header is not a well-formed IHDR, so nothing is guessed.
 pub(super) fn png_facts(png: &[u8]) -> Option<PngFacts> {
-    const SIGNATURE: usize = 8;
-    let ihdr = png.get(SIGNATURE..SIGNATURE + 8 + 13)?;
+    const SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
+    // The download path checks only the first four bytes; facts are read
+    // from a file that carries the whole signature, or not at all.
+    if png.get(..SIGNATURE.len())? != SIGNATURE {
+        return None;
+    }
+    let ihdr = png.get(SIGNATURE.len()..SIGNATURE.len() + 8 + 13)?;
     if ihdr[0..4] != [0, 0, 0, 13] || &ihdr[4..8] != b"IHDR" {
         return None;
     }
