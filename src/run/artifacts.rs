@@ -93,22 +93,86 @@ pub(super) fn save_image(
     let mode = mode.into();
     let bytes = write_png(&image.png, path)?;
     let size = image.size.as_deref();
+    let facts = png_facts(&image.png);
+    let background = image.background.as_deref();
     if mode != Mode::Text {
         let command = if ref_images.is_some() {
             "image edit"
         } else {
             "image create"
         };
-        emit_result(
-            out,
-            mode,
-            command,
-            &image_json(path, size, bytes, ref_images),
-            None,
-        )
+        let mut result = image_json(path, size, bytes, ref_images);
+        result["width"] = json!(facts.map(|f| f.width));
+        result["height"] = json!(facts.map(|f| f.height));
+        result["alpha_channel"] = json!(facts.map(|f| f.alpha_channel));
+        result["background"] = json!(background);
+        emit_result(out, mode, command, &result, None)
     } else {
-        emit_human(out, &render_image_saved(path, size, bytes, ref_images))
+        let mut text = render_image_saved(path, size, bytes, ref_images);
+        text.push_str(&render_png_facts(facts, background));
+        emit_human(out, &text)
     }
+}
+
+/// What the saved file itself declares, read from its IHDR (and, for a
+/// palette image, whether a `tRNS` chunk precedes the image data). The
+/// backend's `size` and `background` are claims; these are the bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct PngFacts {
+    pub width: u32,
+    pub height: u32,
+    /// The PNG can carry transparency (RGBA, gray+alpha, or a palette with
+    /// `tRNS`). It does not say how many pixels are actually transparent.
+    pub alpha_channel: bool,
+}
+
+/// `None` when the header is not a well-formed IHDR, so nothing is guessed.
+pub(super) fn png_facts(png: &[u8]) -> Option<PngFacts> {
+    const SIGNATURE: usize = 8;
+    let ihdr = png.get(SIGNATURE..SIGNATURE + 8 + 13)?;
+    if ihdr[0..4] != [0, 0, 0, 13] || &ihdr[4..8] != b"IHDR" {
+        return None;
+    }
+    let width = u32::from_be_bytes(ihdr[8..12].try_into().ok()?);
+    let height = u32::from_be_bytes(ihdr[12..16].try_into().ok()?);
+    let alpha_channel = match ihdr[17] {
+        4 | 6 => true,
+        0 | 2 => false,
+        3 => palette_has_trns(png)?,
+        _ => return None,
+    };
+    Some(PngFacts {
+        width,
+        height,
+        alpha_channel,
+    })
+}
+
+/// Walk the chunks after IHDR until the image data starts.
+fn palette_has_trns(png: &[u8]) -> Option<bool> {
+    let mut at = 8;
+    loop {
+        let len = u32::from_be_bytes(png.get(at..at + 4)?.try_into().ok()?) as usize;
+        match png.get(at + 4..at + 8)? {
+            b"tRNS" => return Some(true),
+            b"IDAT" | b"IEND" => return Some(false),
+            _ => at = at.checked_add(12)?.checked_add(len)?,
+        }
+    }
+}
+
+pub(super) fn render_png_facts(facts: Option<PngFacts>, background: Option<&str>) -> String {
+    let pixels = facts.map_or(UNKNOWN.to_string(), |f| format!("{}x{}", f.width, f.height));
+    let alpha = match facts {
+        Some(PngFacts {
+            alpha_channel: true,
+            ..
+        }) => "yes",
+        Some(_) => "no",
+        None => UNKNOWN,
+    };
+    let background = background.unwrap_or(ABSENT);
+    format!("  pixels {pixels}, alpha channel {alpha}, backend background {background}\n")
 }
 
 pub(super) fn write_png(bytes: &[u8], path: &Path) -> Result<usize, Error> {

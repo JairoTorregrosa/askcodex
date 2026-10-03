@@ -54,8 +54,7 @@ fn events_are_flushed_incrementally_then_have_one_final_result() {
     let mut err = Vec::new();
     emit_ask(
         Mode::Events,
-        "test-model",
-        Some("high"),
+        AskSettings::new("test-model", Some("high")),
         &mut sink,
         &mut err,
         |delta| {
@@ -96,13 +95,20 @@ fn truncated_and_failed_streams_keep_deltas_without_final_result() {
         let state = Rc::new(RefCell::new(Recording::default()));
         let mut sink = Sink(state.clone());
         let mut err = Vec::new();
-        let result = emit_ask(Mode::Events, "m", None, &mut sink, &mut err, |delta| {
-            delta("partial")?;
-            Err(Error::SseStream {
-                detail: detail.into(),
-            })
-        });
-        assert!(matches!(result, Err(Error::SseStream { detail: actual }) if actual == detail));
+        let result = emit_ask(
+            Mode::Events,
+            AskSettings::new("m", None),
+            &mut sink,
+            &mut err,
+            |delta| {
+                delta("partial")?;
+                Err(Error::SseStream {
+                    detail: detail.into(),
+                    backend: None,
+                })
+            },
+        );
+        assert!(matches!(result, Err(Error::SseStream { detail: actual, .. }) if actual == detail));
         let events = records(&state);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0]["event"], "text_delta");
@@ -119,9 +125,13 @@ fn completed_empty_response_has_result_without_invented_delta() {
     let state = Rc::new(RefCell::new(Recording::default()));
     let mut sink = Sink(state.clone());
     let mut err = Vec::new();
-    emit_ask(Mode::Events, "m", None, &mut sink, &mut err, |_| {
-        Ok(answer(""))
-    })
+    emit_ask(
+        Mode::Events,
+        AskSettings::new("m", None),
+        &mut sink,
+        &mut err,
+        |_| Ok(answer("")),
+    )
     .unwrap();
     let events = records(&state);
     assert_eq!(events.len(), 1);
@@ -136,14 +146,20 @@ fn closing_stdout_between_deltas_returns_error_and_never_result() {
     let mut sink = Sink(state.clone());
     let mut err = Vec::new();
     let reached_after_failure = std::cell::Cell::new(false);
-    let result = emit_ask(Mode::Events, "m", None, &mut sink, &mut err, |delta| {
-        delta("delivered")?;
-        state.borrow_mut().closed = true;
-        delta("not delivered")?;
-        reached_after_failure.set(true);
-        delta("also not delivered")?;
-        Ok(answer("deliverednot deliveredalso not delivered"))
-    });
+    let result = emit_ask(
+        Mode::Events,
+        AskSettings::new("m", None),
+        &mut sink,
+        &mut err,
+        |delta| {
+            delta("delivered")?;
+            state.borrow_mut().closed = true;
+            delta("not delivered")?;
+            reached_after_failure.set(true);
+            delta("also not delivered")?;
+            Ok(answer("deliverednot deliveredalso not delivered"))
+        },
+    );
     assert!(
         !reached_after_failure.get(),
         "stream continued after sink failure"
@@ -162,14 +178,21 @@ fn json_does_not_emit_partial_success_when_stream_fails() {
     let state = Rc::new(RefCell::new(Recording::default()));
     let mut sink = Sink(state.clone());
     let mut err = Vec::new();
-    let result = emit_ask(Mode::Json, "m", None, &mut sink, &mut err, |delta| {
-        delta("uncommitted answer")?;
-        assert!(state.borrow().bytes.is_empty());
-        assert!(state.borrow().flushed_lengths.is_empty());
-        Err(Error::SseStream {
-            detail: "stream ended early".into(),
-        })
-    });
+    let result = emit_ask(
+        Mode::Json,
+        AskSettings::new("m", None),
+        &mut sink,
+        &mut err,
+        |delta| {
+            delta("uncommitted answer")?;
+            assert!(state.borrow().bytes.is_empty());
+            assert!(state.borrow().flushed_lengths.is_empty());
+            Err(Error::SseStream {
+                detail: "stream ended early".into(),
+                backend: None,
+            })
+        },
+    );
     assert!(result.is_err());
     assert!(state.borrow().bytes.is_empty());
     assert!(err.is_empty());

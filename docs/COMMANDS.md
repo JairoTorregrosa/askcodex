@@ -27,6 +27,9 @@ Options:
       --events
           Versioned newline-delimited JSON events for semantic commands
 
+      --backend
+          With --json, add the backend's original response as `backend` to the result of `usage`, `models` and `transcribe` (the catalog is ~700 KB)
+
       --no-refresh
           Do not auto-refresh the access token even if near expiry (also disables the 401 refresh-and-retry)
 
@@ -51,6 +54,9 @@ Options:
 
       --events
           Versioned newline-delimited JSON events for semantic commands
+
+      --backend
+          With --json, add the backend's original response as `backend` to the result of `usage`, `models` and `transcribe` (the catalog is ~700 KB)
 
       --no-refresh
           Do not auto-refresh the access token even if near expiry (also disables the 401 refresh-and-retry)
@@ -78,6 +84,9 @@ Options:
       --events
           Versioned newline-delimited JSON events for semantic commands
 
+      --backend
+          With --json, add the backend's original response as `backend` to the result of `usage`, `models` and `transcribe` (the catalog is ~700 KB)
+
       --no-refresh
           Do not auto-refresh the access token even if near expiry (also disables the 401 refresh-and-retry)
 
@@ -100,6 +109,9 @@ Options:
       --events
           Versioned newline-delimited JSON events for semantic commands
 
+      --backend
+          With --json, add the backend's original response as `backend` to the result of `usage`, `models` and `transcribe` (the catalog is ~700 KB)
+
       --no-refresh
           Do not auto-refresh the access token even if near expiry (also disables the 401 refresh-and-retry)
 
@@ -121,6 +133,9 @@ Options:
 
       --events
           Versioned newline-delimited JSON events for semantic commands
+
+      --backend
+          With --json, add the backend's original response as `backend` to the result of `usage`, `models` and `transcribe` (the catalog is ~700 KB)
 
       --no-refresh
           Do not auto-refresh the access token even if near expiry (also disables the 401 refresh-and-retry)
@@ -149,6 +164,9 @@ Options:
       --events
           Versioned newline-delimited JSON events for semantic commands
 
+      --backend
+          With --json, add the backend's original response as `backend` to the result of `usage`, `models` and `transcribe` (the catalog is ~700 KB)
+
       --no-refresh
           Do not auto-refresh the access token even if near expiry (also disables the 401 refresh-and-retry)
 
@@ -174,6 +192,9 @@ Options:
 
       --events
           Versioned newline-delimited JSON events for semantic commands
+
+      --backend
+          With --json, add the backend's original response as `backend` to the result of `usage`, `models` and `transcribe` (the catalog is ~700 KB)
 
       --no-refresh
           Do not auto-refresh the access token even if near expiry (also disables the 401 refresh-and-retry)
@@ -203,8 +224,16 @@ Options:
 
           [default: image.png]
 
+      --background <BACKGROUND>
+          Force a transparent or an opaque background. Unset, the prompt decides
+
+          [possible values: transparent, opaque]
+
       --events
           Versioned newline-delimited JSON events for semantic commands
+
+      --backend
+          With --json, add the backend's original response as `backend` to the result of `usage`, `models` and `transcribe` (the catalog is ~700 KB)
 
       --no-refresh
           Do not auto-refresh the access token even if near expiry (also disables the 401 refresh-and-retry)
@@ -240,6 +269,14 @@ Options:
 
           [default: image-edited.png]
 
+      --backend
+          With --json, add the backend's original response as `backend` to the result of `usage`, `models` and `transcribe` (the catalog is ~700 KB)
+
+      --background <BACKGROUND>
+          Force a transparent or an opaque background. Unset, the prompt decides
+
+          [possible values: transparent, opaque]
+
       --no-refresh
           Do not auto-refresh the access token even if near expiry (also disables the 401 refresh-and-retry)
 
@@ -274,6 +311,9 @@ Options:
       --instructions <INSTRUCTIONS>
           System-style instructions
 
+      --backend
+          With --json, add the backend's original response as `backend` to the result of `usage`, `models` and `transcribe` (the catalog is ~700 KB)
+
       --effort <EFFORT>
           Reasoning effort
 
@@ -282,6 +322,14 @@ Options:
 
       --no-refresh
           Do not auto-refresh the access token even if near expiry (also disables the 401 refresh-and-retry)
+
+      --verbosity <VERBOSITY>
+          Answer length and detail (`text.verbosity`). Unset, the backend answers at its own default, observed as medium
+
+          [possible values: low, medium, high]
+
+      --schema <FILE>
+          JSON Schema file the answer must match (strict structured output). The parsed answer is also returned as `result.json`
 
   -h, --help
           Print help
@@ -317,6 +365,9 @@ Options:
       --stream
           Stream the raw SSE response to stdout
 
+      --backend
+          With --json, add the backend's original response as `backend` to the result of `usage`, `models` and `transcribe` (the catalog is ~700 KB)
+
       --no-refresh
           Do not auto-refresh the access token even if near expiry (also disables the 401 refresh-and-retry)
 
@@ -343,6 +394,9 @@ Options:
       --events
           Versioned newline-delimited JSON events for semantic commands
 
+      --backend
+          With --json, add the backend's original response as `backend` to the result of `usage`, `models` and `transcribe` (the catalog is ~700 KB)
+
       --no-refresh
           Do not auto-refresh the access token even if near expiry (also disables the 401 refresh-and-retry)
 
@@ -365,6 +419,9 @@ Options:
       --events
           Versioned newline-delimited JSON events for semantic commands
 
+      --backend
+          With --json, add the backend's original response as `backend` to the result of `usage`, `models` and `transcribe` (the catalog is ~700 KB)
+
       --no-refresh
           Do not auto-refresh the access token even if near expiry (also disables the 401 refresh-and-retry)
 
@@ -386,6 +443,9 @@ Options:
 
       --events
           Versioned newline-delimited JSON events for semantic commands
+
+      --backend
+          With --json, add the backend's original response as `backend` to the result of `usage`, `models` and `transcribe` (the catalog is ~700 KB)
 
       --no-refresh
           Do not auto-refresh the access token even if near expiry (also disables the 401 refresh-and-retry)

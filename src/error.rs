@@ -131,13 +131,16 @@ pub enum Error {
     },
 
     /// The backend answered a non-success HTTP status. `snippet` is the
-    /// error body truncated to `config::ERROR_SNIPPET_BYTES`.
+    /// error body truncated to `config::ERROR_SNIPPET_BYTES`; `backend` is
+    /// the backend's own error object when the body was JSON (see
+    /// [`backend_error_detail`]).
     #[error("{method} {path} -> HTTP {status}: {snippet}")]
     HttpStatus {
         method: String,
         path: String,
         status: u16,
         snippet: String,
+        backend: Option<serde_json::Value>,
     },
 
     /// A 2xx response body that should have been JSON was not.
@@ -180,7 +183,10 @@ pub enum Error {
     /// `error`, or ended without `response.completed`. `detail` is the
     /// raw event JSON truncated to `config::ERROR_SNIPPET_BYTES`.
     #[error("responses stream error: {detail}")]
-    SseStream { detail: String },
+    SseStream {
+        detail: String,
+        backend: Option<serde_json::Value>,
+    },
 
     /// Transport-level failure (TLS, DNS, connect, timeout, protocol).
     /// NOTE: with the askcodex agent config (`http_status_as_error(false)`)
@@ -227,6 +233,24 @@ pub enum Error {
     },
 }
 
+/// The backend's own error object out of an error document: the `error`
+/// object when there is one (`{"error": {"code", "param", ...}}`, and the
+/// `response.error` of a `response.failed` event), otherwise the document
+/// itself when it is an object (`{"detail": "..."}`). Verbatim, never
+/// reshaped; `None` for anything else.
+pub fn backend_error_detail(document: &serde_json::Value) -> Option<serde_json::Value> {
+    let nested = document
+        .get("response")
+        .and_then(|response| response.get("error"))
+        .or_else(|| document.get("error"))
+        .filter(|error| error.is_object());
+    match nested {
+        Some(error) => Some(error.clone()),
+        None if document.is_object() => Some(document.clone()),
+        None => None,
+    }
+}
+
 impl Error {
     /// Stable machine classification; message wording may evolve independently.
     pub fn code(&self) -> &'static str {
@@ -263,6 +287,23 @@ impl Error {
         }
     }
 
+    /// The HTTP status of a backend rejection, for machine diagnostics.
+    pub fn http_status(&self) -> Option<u16> {
+        match self {
+            Self::HttpStatus { status, .. } => Some(*status),
+            _ => None,
+        }
+    }
+
+    /// The backend's own error object (`code`, `param`, `message`,
+    /// `detail`, ...), when it sent one, for machine diagnostics.
+    pub fn backend_detail(&self) -> Option<&serde_json::Value> {
+        match self {
+            Self::HttpStatus { backend, .. } | Self::SseStream { backend, .. } => backend.as_ref(),
+            _ => None,
+        }
+    }
+
     /// Write operational diagnostics to stderr without polluting result stdout.
     pub fn write_diagnostic(
         &self,
@@ -270,7 +311,14 @@ impl Error {
         machine: bool,
     ) -> std::io::Result<()> {
         if machine {
-            let value = serde_json::json!({"schema_version": 1, "error": {"code": self.code(), "message": self.to_string()}});
+            let mut error = serde_json::json!({"code": self.code(), "message": self.to_string()});
+            if let Some(status) = self.http_status() {
+                error["http_status"] = status.into();
+            }
+            if let Some(backend) = self.backend_detail() {
+                error["backend"] = backend.clone();
+            }
+            let value = serde_json::json!({"schema_version": 1, "error": error});
             serde_json::to_writer(&mut *out, &value)?;
             out.write_all(b"\n")
         } else {
@@ -282,5 +330,52 @@ impl Error {
     /// errors and exits 2 on its own; SIGINT terminates by default).
     pub fn exit_code(&self) -> i32 {
         1
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn backend_error_detail_takes_the_error_object_verbatim() {
+        let nested =
+            json!({"error": {"code": "invalid_json_schema", "param": "text.format.schema"}});
+        assert_eq!(backend_error_detail(&nested), Some(nested["error"].clone()));
+        let failed = json!({"type": "response.failed", "response": {"error": {"code": "c"}}});
+        assert_eq!(backend_error_detail(&failed), Some(json!({"code": "c"})));
+        // `{"detail": ...}` is the shape of an unknown-model rejection.
+        let detail = json!({"detail": "The 'x' model is not supported."});
+        assert_eq!(backend_error_detail(&detail), Some(detail.clone()));
+        // A string `error` is not an error object; the document is kept whole.
+        let flat = json!({"error": "rate limited"});
+        assert_eq!(backend_error_detail(&flat), Some(flat.clone()));
+        assert_eq!(backend_error_detail(&json!("text")), None);
+        assert_eq!(backend_error_detail(&json!([1])), None);
+    }
+
+    #[test]
+    fn machine_diagnostics_add_status_and_backend_only_when_known() {
+        let rejected = Error::HttpStatus {
+            method: "POST".into(),
+            path: "/codex/responses".into(),
+            status: 400,
+            snippet: "{...}".into(),
+            backend: Some(json!({"code": "unsupported_value", "param": "reasoning.effort"})),
+        };
+        let mut out = Vec::new();
+        rejected.write_diagnostic(&mut out, true).unwrap();
+        let doc: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(doc["error"]["code"], "http_error");
+        assert_eq!(doc["error"]["http_status"], 400);
+        assert_eq!(doc["error"]["backend"]["param"], "reasoning.effort");
+
+        let local = Error::InvalidInput { reason: "nope" };
+        let mut out = Vec::new();
+        local.write_diagnostic(&mut out, true).unwrap();
+        let doc: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        let keys: Vec<_> = doc["error"].as_object().unwrap().keys().cloned().collect();
+        assert_eq!(keys, ["code", "message"], "no invented fields: {doc}");
     }
 }

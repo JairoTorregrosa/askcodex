@@ -24,6 +24,7 @@ pub(super) enum Backend {
     ImageCreate {
         prompt: String,
         out: PathBuf,
+        background: Option<Background>,
     },
     ImageEdit {
         prepared: endpoints::images::PreparedEdit,
@@ -34,6 +35,10 @@ pub(super) enum Backend {
         model: String,
         instructions: Option<String>,
         effort: Option<Effort>,
+        verbosity: Option<Verbosity>,
+        /// Already read and parsed: a missing or malformed schema file
+        /// never reaches the network.
+        schema: Option<Value>,
     },
     Raw {
         method: HttpMethod,
@@ -54,10 +59,19 @@ pub(super) fn resolve(cmd: Cmd, stdin: &mut dyn Read) -> Result<Resolved, Error>
         Cmd::Usage => Resolved::Backend(Backend::Usage),
         Cmd::Models { client_version } => Resolved::Backend(Backend::Models { client_version }),
         Cmd::Image {
-            cmd: ImageCmd::Create { prompt, out },
+            cmd:
+                ImageCmd::Create {
+                    prompt,
+                    out,
+                    background,
+                },
         } => {
             preflight_out_path(&out)?;
-            Resolved::Backend(Backend::ImageCreate { prompt, out })
+            Resolved::Backend(Backend::ImageCreate {
+                prompt,
+                out,
+                background,
+            })
         }
         Cmd::Image {
             cmd:
@@ -65,11 +79,12 @@ pub(super) fn resolve(cmd: Cmd, stdin: &mut dyn Read) -> Result<Resolved, Error>
                     prompt,
                     inputs,
                     out,
+                    background,
                 },
         } => {
             preflight_out_path(&out)?;
             let refs: Vec<&Path> = inputs.iter().map(PathBuf::as_path).collect();
-            let prepared = endpoints::images::PreparedEdit::read(&prompt, &refs)?;
+            let prepared = endpoints::images::PreparedEdit::read(&prompt, &refs, background)?;
             Resolved::Backend(Backend::ImageEdit { out, prepared })
         }
         Cmd::Ask {
@@ -77,7 +92,10 @@ pub(super) fn resolve(cmd: Cmd, stdin: &mut dyn Read) -> Result<Resolved, Error>
             model,
             instructions,
             effort,
+            verbosity,
+            schema,
         } => {
+            let schema = schema.as_deref().map(read_schema).transpose()?;
             let prompt = if prompt == STDIN_MARKER {
                 read_stdin(stdin)?
             } else {
@@ -88,6 +106,8 @@ pub(super) fn resolve(cmd: Cmd, stdin: &mut dyn Read) -> Result<Resolved, Error>
                 model,
                 instructions,
                 effort,
+                verbosity,
+                schema,
             })
         }
         Cmd::Raw {
@@ -120,6 +140,20 @@ pub(super) fn resolve(cmd: Cmd, stdin: &mut dyn Read) -> Result<Resolved, Error>
         Cmd::Auth { cmd } => Resolved::Auth(cmd),
     };
     Ok(resolved)
+}
+
+/// Read a `--schema` file: a bounded regular file holding one JSON object.
+/// Whether it is a valid strict schema is the backend's call (it answers
+/// HTTP 400 `invalid_json_schema` naming the problem); a file that is not
+/// even a JSON object is refused here, before credentials are loaded.
+pub(super) fn read_schema(path: &Path) -> Result<Value, Error> {
+    let bytes = crate::input::read_file(path, crate::input::MAX_TEXT_BYTES, "schema file")?;
+    match serde_json::from_slice::<Value>(&bytes)? {
+        schema @ Value::Object(_) => Ok(schema),
+        _ => Err(Error::InvalidInput {
+            reason: "--schema must hold a JSON object (a JSON Schema)",
+        }),
+    }
 }
 
 pub(super) fn read_stdin(stdin: &mut dyn Read) -> Result<String, Error> {

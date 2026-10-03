@@ -15,6 +15,22 @@ impl From<bool> for Mode {
     }
 }
 
+/// Output mode plus `--backend` (include the original response).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Output {
+    pub mode: Mode,
+    pub backend: bool,
+}
+
+impl<M: Into<Mode>> From<M> for Output {
+    fn from(mode: M) -> Self {
+        Output {
+            mode: mode.into(),
+            backend: false,
+        }
+    }
+}
+
 pub(super) fn emit_result<T: Serialize + ?Sized>(
     out: &mut dyn Write,
     mode: Mode,
@@ -32,6 +48,21 @@ pub(super) fn emit_result<T: Serialize + ?Sized>(
     } else {
         emit_json(out, &envelope)
     }
+}
+
+/// [`emit_result`] for the commands whose original response is worth
+/// inspecting (`usage`, `models`, `transcribe`). The original rides along
+/// as `backend` only with `--backend`: it is an inspection surface, not
+/// the result, and the model catalog alone is ~700 KB of Codex prompts.
+pub(super) fn emit_inspectable<T: Serialize + ?Sized>(
+    out: &mut dyn Write,
+    output: Output,
+    command: &str,
+    result: &T,
+    raw: &Value,
+) -> Result<(), Error> {
+    let backend = output.backend.then_some(raw);
+    emit_result(out, output.mode, command, result, backend)
 }
 
 fn emit_event(out: &mut dyn Write, event: &Value) -> Result<(), Error> {
@@ -89,10 +120,30 @@ pub(super) fn advise_empty_answer(err: &mut dyn Write) -> Result<(), Error> {
     Ok(())
 }
 
+/// What `ask` sent, echoed into its result.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct AskSettings<'a> {
+    pub model: &'a str,
+    pub effort: Option<&'a str>,
+    pub verbosity: Option<&'a str>,
+    /// `--schema` was given: the answer must parse as JSON.
+    pub structured: bool,
+}
+
+impl<'a> AskSettings<'a> {
+    pub fn new(model: &'a str, effort: Option<&'a str>) -> Self {
+        AskSettings {
+            model,
+            effort,
+            verbosity: None,
+            structured: false,
+        }
+    }
+}
+
 pub(super) fn emit_ask<F>(
     mode: impl Into<Mode>,
-    model: &str,
-    effort: Option<&str>,
+    settings: AskSettings<'_>,
     out: &mut dyn Write,
     err: &mut dyn Write,
     stream: F,
@@ -132,6 +183,15 @@ where
 
     let text = answer.text;
 
+    // With `--schema` the backend enforces the schema, so an answer that
+    // does not parse means the contract broke (or the model returned
+    // nothing). That is a failure, never a result with a missing `json`.
+    let json = if settings.structured {
+        Some(parse_structured_answer(&text)?)
+    } else {
+        None
+    };
+
     // Said once, before either rendering: an empty answer is a real
     // outcome, but it must be visible as one instead of being padded into
     // something that looks like text.
@@ -145,9 +205,11 @@ where
             mode,
             "ask",
             &AskOutput {
-                model: model.to_string(),
-                effort: effort.map(str::to_string),
+                model: settings.model.to_string(),
+                effort: settings.effort.map(str::to_string),
+                verbosity: settings.verbosity.map(str::to_string),
                 text,
+                json,
                 usage: answer.usage,
             },
             None,
@@ -162,6 +224,17 @@ where
         // it did not say.
         emit_human(out, "\n")
     }
+}
+
+fn parse_structured_answer(text: &str) -> Result<Value, Error> {
+    serde_json::from_str(text).map_err(|source| {
+        let start: String = text.chars().take(160).collect();
+        Error::UnexpectedResponse {
+            context: format!(
+                "--schema answer is not valid JSON ({source}); it starts with {start:?}"
+            ),
+        }
+    })
 }
 
 pub(super) fn render_whoami(who: &models::WhoamiOutput) -> String {
@@ -252,11 +325,33 @@ pub(super) fn render_models(models: &[ModelInfo]) -> String {
             Some(other) => format!("  [{other}]"),
             None => format!("  [{ABSENT}]"),
         };
+        let default = model.default_reasoning_level.as_deref().unwrap_or(ABSENT);
         text.push_str(&format!(
-            "  - {slug:<18} in:{modalities:<12} effort:{efforts}{flag}\n"
+            "  - {slug:<24} in:{modalities:<12} effort:{efforts} (codex default {default}){flag}\n"
         ));
+        if let Some(description) = model.description.as_deref() {
+            text.push_str(&format!("      {description}\n"));
+        }
+        if let Some(upgrade) = render_upgrade(model.upgrade.as_ref()) {
+            text.push_str(&format!("      {upgrade}\n"));
+        }
     }
     text
+}
+
+/// One line for a model the backend wants callers to leave, from the
+/// fields it actually sent; `None` when there is no `upgrade` object.
+fn render_upgrade(upgrade: Option<&Value>) -> Option<String> {
+    let upgrade = upgrade?.as_object()?;
+    let to = upgrade
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or(UNKNOWN);
+    let line = match upgrade.get("retirement_at").and_then(Value::as_str) {
+        Some(when) => format!("retires {when}; upgrade to {to}"),
+        None => format!("upgrade to {to}"),
+    };
+    Some(line)
 }
 
 pub(super) fn render_bool(value: Option<bool>) -> String {

@@ -251,10 +251,15 @@ automatic task delegation": a Codex client-side multi-agent mode (`multi_agent_r
 envelope is summarized in [`samples/image-response-meta.json`](samples/image-response-meta.json)) ·
 `[verified-source .../codex-rs/codex-api/src/endpoint/images.rs#L33-L45]` (`generate()` posts path `"images/generations"`).
 
-Request body the CLI sends (only these two fields matter):
+Request body the CLI sends (`background` only with `--background`, since 0.3.0):
 ```json
-{ "prompt": "<text>", "model": "gpt-image-2" }
+{ "prompt": "<text>", "model": "gpt-image-2", "background": "transparent" | "opaque" }
 ```
+Codex `rust-v0.160.0` always sends `background` (`"transparent"` when its image tool asks for a
+transparent background, otherwise `"opaque"`), plus `quality: "auto"` and `size: "auto"`, for both
+generations and edits `[verified-source 2026-10-02: codex-rs/ext/image-generation/src/tool.rs,
+request_for_call_args]`. askcodex sends `background` only when the user forces one, so an unset
+flag keeps the prompt in charge (§5).
 Source request type `ImageGenerationRequest { prompt, model, background?, quality?, size?, n? }`
 `[verified-source .../codex-rs/codex-api/src/images.rs#L5-L16]`. `model="gpt-image-2"` is hardcoded by
 the codex tool `[verified-source .../codex-rs/ext/image-generation/src/tool.rs#L57]`
@@ -266,10 +271,10 @@ Images 2.5 API models (`gpt-image-2.5-flare`, `gpt-image-2.5-sunburst`) `[verifi
 `[verified-live 2026-08-07]` (one real `askcodex image edit` with a single reference image) ·
 `[verified-source .../codex-rs/codex-api/src/endpoint/images.rs#L47-L53]` (`edit()` posts path `"images/edits"`).
 
-Request body:
+Request body (`background` only with `--background`):
 ```json
 { "prompt": "<text>", "model": "gpt-image-2",
-  "images": [ { "image_url": "data:image/png;base64,…" } ] }
+  "images": [ { "image_url": "data:image/png;base64,…" } ], "background": "opaque" }
 ```
 `ImageEditRequest { images: Vec<ImageUrl>, prompt, model, background?, quality?, size?, n? }`,
 `ImageUrl { image_url: String }` `[verified-source .../codex-rs/codex-api/src/images.rs#L19-L36]`.
@@ -331,7 +336,8 @@ tokens out). Each `data[]` item now carries `generation_id` next to `b64_json` (
 since openai/codex PR #43953, 2026-09-09); askcodex ignores it. A raw request with
 `background: "transparent"` reported `background: "transparent"`, `quality: "medium"` and 2058
 output image tokens (§5). The raw envelopes are not committed (they hold per-generation ids).
-askcodex reads none of these fields except `size`.
+askcodex reads `size` and, since 0.3.0, `background` (reported as the backend's claim next to the
+width, height and alpha channel it reads from the saved PNG's IHDR).
 
 ### 3.7 `POST /codex/responses` — streaming text completion (SSE)
 `[verified-live 2026-08-07]` (one real `askcodex ask`, plus the same call through `askcodex raw --stream`;
@@ -342,7 +348,10 @@ an adapted fixture is [`samples/responses-sse.txt`](samples/responses-sse.txt); 
               "content": [ { "type": "input_text", "text": "<prompt>" } ] } ],
   "stream": true, "store": false }
 ```
-Optional: `"instructions": "<system-style>"`, `"reasoning": { "effort": "<level>" }`.
+Optional: `"instructions": "<system-style>"`, `"reasoning": { "effort": "<level>" }`, and
+`"text": { "verbosity": "low" | "medium" | "high", "format": { "type": "json_schema", "strict": true,
+"schema": { … }, "name": "codex_output_schema" } }` (each part only when set; the shape Codex sends,
+`codex-rs/codex-api/src/common.rs` `create_text_param_for_request` at `rust-v0.160.0`).
 Extra headers: `OpenAI-Beta: responses=experimental`, `Accept: text/event-stream`.
 **`store` MUST be `false`.** `[verified-live 2026-08-07]` — SSE contract below.
 
@@ -356,6 +365,31 @@ Extra headers: `OpenAI-Beta: responses=experimental`, `Accept: text/event-stream
   per model.
 - `"minimal"` is in the server's generic list but in no model's catalog entry; askcodex does not
   offer it `[UNVERIFIED: not sent to any model]`.
+- `[verified-live 2026-10-02]` `gpt-6.1-sol` rejects `"none"` with the same `unsupported_value`
+  400; `gpt-6-sol`, `gpt-6-luna` and `gpt-5.6-sol` accept it although the 0.160.0 catalog does not
+  list `none` for them. The catalog's effort list is not the server's.
+
+`text` controls `[verified-live 2026-10-02, `askcodex raw --stream`]`:
+- `text.verbosity` is honored and echoed in `response.completed`: the same prompt to
+  `gpt-6.1-sol` returned 240 output tokens at `"low"` and 513 at `"high"`. Without it the response
+  echoes `"verbosity": "medium"` (Codex sends the catalog's `default_verbosity`, `"low"`).
+- `text.format` with a strict JSON Schema is enforced: `gpt-6-luna` returned schema-conforming
+  JSON for a ticket classification, and also for a prompt that demanded a haiku and "no JSON"
+  (the haiku landed inside the `summary` string). The response echoes the format with
+  `"strict": true`.
+- A strict schema whose `required` omits a property → HTTP 400 before any stream:
+  `{"error": {"message": "Invalid schema for response_format 'ticket': … Missing 'severity'.",
+  "type": "invalid_request_error", "param": "text.format.schema", "code": "invalid_json_schema"}}`.
+- An unknown model → HTTP 400 `{"detail": "The '<slug>' model is not supported when using Codex
+  with a ChatGPT account."}` (no `error` object).
+
+Since 0.3.0 the machine error diagnostic carries `http_status` and the backend's error object as
+`backend` (OUTPUT.md). Codex treats `response.incomplete` as terminal (interrupted) and maps
+`response.failed` codes such as `context_length_exceeded`, `insufficient_quota`, `cyber_policy`
+and `invalid_prompt` to distinct errors `[verified-source 2026-10-02:
+codex-rs/codex-api/src/sse/responses.rs at rust-v0.160.0]`; askcodex fails on both events with
+`stream_failed` and passes `response.error` / `incomplete_details` through as `backend`
+`[UNVERIFIED live: neither event was provoked]`.
 
 ---
 
@@ -488,15 +522,23 @@ report §2, which is **not in this repository**; the 2026-09-27 probes below wer
   here) `[verified-live 2026-09-27]`; `quality: "auto"` on an opaque request (same envelope as without
   it) `[verified-live 2026-09-27]`; `size`, `output_format`, `n` and explicit quality values
   `[UNVERIFIED since 2026-08-07: RE report §2, not committed here]`.
-- **Honored knob:** `background: "transparent"` (raw call with the body Codex `main` sends: RGBA,
-  46.2% of pixels at alpha 0, `quality: "medium"`, 41 s) `[verified-live 2026-09-27, one call]`.
-  openai/codex PR #47484 (merged 2026-09-23, in `rust-v0.159.0-alpha.9`, not in `rust-v0.157.1`)
-  gives the Codex image tool an explicit transparent-background argument.
-- **CLI consequence:** askcodex sends only `prompt` (+ reference images for edit) and `model` for
-  parity. Advertising an ignored knob would be a failure-masking default and is prohibited.
-  Transparency is reachable through the prompt; a `--transparent` flag mapped to
-  `background: "transparent"` would change the output and is therefore allowed, but it is not
-  implemented.
+- **Honored knob, both ways:** `background`. `"transparent"`: raw call with the body Codex `main`
+  sends: RGBA, 46.2% of pixels at alpha 0, `quality: "medium"`, 41 s `[verified-live 2026-09-27,
+  one call]`; with a neutral prompt ("A red ceramic mug, product photo, centered."): RGBA, 42.4% at
+  alpha 0, 1254×1254, 32 s `[verified-live 2026-10-02, one call]`. `"opaque"` with a prompt that
+  asks for "a fully transparent background (PNG cutout, no backdrop)": RGB, no alpha, 1402×1122,
+  `quality: "low"`, 16 s `[verified-live 2026-10-02, one call]`. Through the 0.3.0 flags: `image
+  create --background transparent` (neutral prompt) → RGBA 1254×1254, 66.3% at alpha 0, a clean
+  cutout; `image edit --background opaque` with that cutout as the reference → RGB 1254×1254, the
+  same pot placed in a scene `[verified-live 2026-10-02, one call each]`. The envelope echoes the
+  value sent.
+  openai/codex PR #47484 (merged 2026-09-23, released in `rust-v0.159.0`) gives the Codex image
+  tool this argument, and Codex `rust-v0.160.0` always sends it (§3.4).
+- **CLI consequence:** askcodex sends `prompt` (+ reference images for edit) and `model` for
+  parity, plus `background` when `--background transparent|opaque` is given (since 0.3.0); unset,
+  the prompt decides. Advertising an ignored knob would be a failure-masking default and is
+  prohibited, so no other knob is exposed. The image result reports the backend's `background`
+  next to the `width`, `height` and `alpha_channel` read from the saved file.
 - **Not available on the subscription path:** an exact size, quality selection, `n>1`, non-PNG
   output, mask inpainting, `input_fidelity`, partial/streaming images, model selection, Sora/video,
   DALL·E. Beyond the items verified above, this list is the RE report §4 inventory and carries the
@@ -621,9 +663,10 @@ are listed rather than smoothed over, and each one names where the gap is.
   2.5 rolled out to Codex users; learn.chatgpt.com's Codex image-generation page says built-in
   generation uses `gpt-image-2`. The response names no model and the C2PA manifest says only
   "gpt-image" `[UNVERIFIED]`.
-- Transparency: one prompt-only call and one `background: "transparent"` call on 2026-09-27; edits
-  with a transparency request, and whether transparency always raises `quality` to `medium`, are
-  `[UNVERIFIED]`.
+- Transparency: one prompt-only call and one `background: "transparent"` call on 2026-09-27, one
+  neutral-prompt `"transparent"` and one transparency-prompt `"opaque"` call, plus one
+  `--background transparent` create and one `--background opaque` edit, on 2026-10-02 (§5). One
+  call per case; whether transparency always raises `quality` to `medium` is `[UNVERIFIED]`.
 - The per-knob "ignored knobs" matrix in §5 rests on RE report §2, likewise not in this repository
   `[UNVERIFIED]`. `model`, `quality: "auto"` and `background` were re-probed on 2026-09-27; its
   consequence for a neutral prompt — one opaque PNG at a server-chosen size — is verified live and
@@ -635,9 +678,14 @@ are listed rather than smoothed over, and each one names where the gap is.
   `[declared]`.
 - Keyring credential storage: never exercised — the validation machine stores tokens in the file
   `[UNVERIFIED]`.
-- SSE failure events (`response.failed`/`response.error`) were never provoked against the live
-  backend `[UNVERIFIED-live]`; they are covered offline by synthesized streams built from the real
-  framing.
+- SSE failure events (`response.failed`/`response.error`/`response.incomplete`) were never provoked
+  against the live backend `[UNVERIFIED-live]`; they are covered offline by synthesized streams
+  built from the real framing and Codex's own test payloads (`cyber_policy`,
+  `context_length_exceeded`).
+- Structured output refusals: the public Responses API can return a `refusal` content part instead
+  of text when a schema-constrained request is refused. Codex does not handle it and askcodex does
+  not model it; with `--schema` such an answer has no parseable text and fails as
+  `response_invalid` `[UNVERIFIED-live: not provoked]`.
 - Multi-line `data:` frames not observed; parser should still handle them defensively `[UNVERIFIED]`.
 - Source pin `2e3a1702…` is repo HEAD (newer than the installed `0.147.x`); paths verified to exist at
   that commit. Constants/structs are stable across this range but re-pin per release.

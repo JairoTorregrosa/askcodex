@@ -276,11 +276,11 @@ impl Client {
         let (_parts, response_body) = response.into_parts();
 
         if !is_success(status) {
-            return Err(http_status_error(
+            return Err(http_status_error_from_body(
                 method,
                 path,
                 status,
-                snippet_of_body(response_body),
+                response_body,
             ));
         }
 
@@ -340,11 +340,11 @@ impl Client {
         let (_parts, response_body) = response.into_parts();
 
         if !is_success(status) {
-            return Err(http_status_error(
+            return Err(http_status_error_from_body(
                 &method,
                 path,
                 status,
-                snippet_of_body(response_body),
+                response_body,
             ));
         }
 
@@ -745,6 +745,36 @@ fn http_status_error(method: &Method, path: &str, status: u16, snippet: String) 
         path: path.to_string(),
         status,
         snippet,
+        backend: None,
+    }
+}
+
+/// The loud non-2xx error, with the backend's JSON error object recovered
+/// for machine diagnostics. The body is read once, bounded by
+/// `config::ERROR_BODY_PARSE_BYTES`; the message still quotes at most
+/// `config::ERROR_SNIPPET_BYTES` of it. A read failure or a non-JSON (or
+/// over-long, hence cut) body leaves `backend` empty instead of guessing.
+fn http_status_error_from_body(method: &Method, path: &str, status: u16, body: Body) -> Error {
+    let limit = config::ERROR_BODY_PARSE_BYTES as u64;
+    let mut reader = body.into_with_config().limit(limit).reader().take(limit);
+    let mut buf = Vec::new();
+    let read = reader.read_to_end(&mut buf);
+    let snippet = match (&read, buf.is_empty()) {
+        (Ok(_), true) => "<empty body>".to_string(),
+        (Err(_), true) => "<error body unreadable>".to_string(),
+        _ => snippet_of_bytes(&buf),
+    };
+    let complete = read.is_ok() && buf.len() < config::ERROR_BODY_PARSE_BYTES;
+    let backend = complete
+        .then(|| serde_json::from_slice::<Value>(&buf).ok())
+        .flatten()
+        .and_then(|document| crate::error::backend_error_detail(&document));
+    Error::HttpStatus {
+        method: method.to_string(),
+        path: path.to_string(),
+        status,
+        snippet,
+        backend,
     }
 }
 
@@ -767,18 +797,12 @@ fn read_body_limited(body: Body, limit: u64) -> Result<Vec<u8>, Error> {
     Ok(buf)
 }
 
-/// Best-effort bounded snippet of an error body.
-///
-/// Reads at most `config::ERROR_SNIPPET_BYTES` and never propagates a read
-/// failure: the HTTP status is the error being reported and must not be
-/// displaced by a failure to gather context. A body that cannot be read at
-/// all is reported as such rather than as an empty string.
-fn snippet_of_body(body: Body) -> String {
-    snippet_of_body_bounded(body, config::ERROR_SNIPPET_BYTES)
-}
-
-/// [`snippet_of_body`] with an explicit budget, for the one caller that
-/// has to share `config::ERROR_SNIPPET_BYTES` with appended guidance.
+/// Best-effort bounded snippet of an error body, with an explicit budget,
+/// for the one caller that has to share `config::ERROR_SNIPPET_BYTES` with
+/// appended guidance. Never propagates a read failure: the HTTP status is
+/// the error being reported and must not be displaced by a failure to
+/// gather context. A body that cannot be read at all is reported as such
+/// rather than as an empty string.
 fn snippet_of_body_bounded(body: Body, max: usize) -> String {
     // Doubly bounded: ureq's own limit plus a `take` that stops before the
     // limit can fire, so an oversized error body yields a snippet instead

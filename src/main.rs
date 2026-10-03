@@ -17,10 +17,8 @@
 //!   exits non-zero instead of aborting mid-write. Truncated output is a
 //!   real failure and is reported as one — it is never quietly swallowed.
 
-use clap::Parser;
-
 fn main() {
-    let cli = askcodex::Cli::parse();
+    let cli = askcodex::Cli::parse_checked();
     let machine = cli.json || cli.events;
     if let Err(e) = askcodex::run(cli) {
         let _ = e.write_diagnostic(&mut std::io::stderr().lock(), machine);

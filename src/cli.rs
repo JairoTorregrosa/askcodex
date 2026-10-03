@@ -8,16 +8,17 @@
 //! askcodex usage
 //! askcodex models [--client-version <v>]
 //! askcodex transcribe <file.wav>
-//! askcodex image create <prompt> [-o <file>]
-//! askcodex image edit  <prompt> -i <ref>... [-o <file>]
-//! askcodex ask <prompt> [--model <m>] [--effort <e>] [--instructions <s>]   (prompt "-" = stdin)
+//! askcodex image create <prompt> [-o <file>] [--background <b>]
+//! askcodex image edit  <prompt> -i <ref>... [-o <file>] [--background <b>]
+//! askcodex ask <prompt> [--model <m>] [--effort <e>] [--instructions <s>]
+//!              [--verbosity <v>] [--schema <file.json>]   (prompt "-" = stdin)
 //! askcodex raw <METHOD> <path> [--body <json|->] [--stream]
 //! askcodex auth status
 //! askcodex auth refresh
 //! ```
 //!
-//! Global flags `--json`, `--events` and `--no-refresh` are accepted anywhere,
-//! including after the deepest subcommand (probe-verified).
+//! Global flags `--json`, `--events`, `--backend` and `--no-refresh` are
+//! accepted anywhere, including after the deepest subcommand (probe-verified).
 //!
 //! Credential source is ~/.codex/auth.json (ChatGPT subscription tokens).
 //! No API key is used or accepted — there is deliberately no flag, env
@@ -29,11 +30,11 @@
 //! `/`, or an absolute URL on the backend's own origin, and nothing else.
 //! There is deliberately no flag that widens that set.
 //!
-//! The image commands expose ONLY the prompt (+ reference images for
-//! edit): the backend returns a single PNG at a size it chooses and ignores
-//! model/size/quality/format/n. Advertising ignored knobs would be a
-//! failure-masking default, so they do not exist here. A prompt that asked
-//! for transparency has returned alpha (dated observation, docs/PROTOCOL.md §5).
+//! The image commands expose the prompt (+ reference images for edit) and
+//! `--background`, the one knob the backend was observed to honor in both
+//! directions (docs/PROTOCOL.md §5). It returns a single PNG at a size it
+//! chooses and ignores model/size/quality/format/n. Advertising ignored knobs
+//! would be a failure-masking default, so they do not exist here.
 
 use std::path::PathBuf;
 
@@ -60,6 +61,11 @@ pub struct Cli {
     /// Versioned newline-delimited JSON events for semantic commands.
     #[arg(long, global = true, conflicts_with = "json")]
     pub events: bool,
+
+    /// With --json, add the backend's original response as `backend` to the
+    /// result of `usage`, `models` and `transcribe` (the catalog is ~700 KB).
+    #[arg(long, global = true)]
+    pub backend: bool,
 
     /// Do not auto-refresh the access token even if near expiry (also
     /// disables the 401 refresh-and-retry).
@@ -114,6 +120,16 @@ pub enum Cmd {
         /// Reasoning effort.
         #[arg(long, value_enum, default_value = config::DEFAULT_ASK_EFFORT)]
         effort: Option<Effort>,
+
+        /// Answer length and detail (`text.verbosity`). Unset, the backend
+        /// answers at its own default, observed as medium.
+        #[arg(long, value_enum)]
+        verbosity: Option<Verbosity>,
+
+        /// JSON Schema file the answer must match (strict structured output).
+        /// The parsed answer is also returned as `result.json`.
+        #[arg(long, value_name = "FILE")]
+        schema: Option<PathBuf>,
     },
 
     /// Call an arbitrary backend path (escape hatch).
@@ -141,6 +157,27 @@ pub enum Cmd {
         #[command(subcommand)]
         cmd: AuthCmd,
     },
+}
+
+impl Cli {
+    /// Parse argv, then enforce the cross-level rule clap cannot express for
+    /// global flags (a `requires` between two globals fails when they sit on
+    /// different sides of the subcommand): `--backend` needs `--json`.
+    /// Violations exit 2 with clap's own diagnostic, like any usage error.
+    pub fn parse_checked() -> Self {
+        Self::check(Self::parse()).unwrap_or_else(|e| e.exit())
+    }
+
+    /// The post-parse checks, separate so tests can drive them.
+    pub fn check(self) -> Result<Self, clap::Error> {
+        if self.backend && !self.json {
+            return Err(Self::command().error(
+                clap::error::ErrorKind::MissingRequiredArgument,
+                "--backend requires --json",
+            ));
+        }
+        Ok(self)
+    }
 }
 
 /// Generate documentation from the same command tree that parses user input.
@@ -178,6 +215,11 @@ pub enum ImageCmd {
         /// Output PNG path.
         #[arg(short, long, default_value = "image.png")]
         out: PathBuf,
+
+        /// Force a transparent or an opaque background. Unset, the prompt
+        /// decides.
+        #[arg(long, value_enum)]
+        background: Option<Background>,
     },
 
     /// Edit / reference-guided image (up to 5 reference images).
@@ -192,6 +234,11 @@ pub enum ImageCmd {
         /// Output PNG path.
         #[arg(short, long, default_value = "image-edited.png")]
         out: PathBuf,
+
+        /// Force a transparent or an opaque background. Unset, the prompt
+        /// decides.
+        #[arg(long, value_enum)]
+        background: Option<Background>,
     },
 }
 
@@ -229,6 +276,44 @@ impl Effort {
             Effort::Xhigh => "xhigh",
             Effort::Max => "max",
             Effort::None => "none",
+        }
+    }
+}
+
+/// Answer verbosity accepted by `--verbosity` (`text.verbosity`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum Verbosity {
+    Low,
+    Medium,
+    High,
+}
+
+impl Verbosity {
+    /// The wire string for the `text.verbosity` field.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Verbosity::Low => "low",
+            Verbosity::Medium => "medium",
+            Verbosity::High => "high",
+        }
+    }
+}
+
+/// Image background accepted by `--background`. Codex 0.160.0 always sends
+/// one of these two; `auto` exists in its enum but is not offered here
+/// because leaving the flag unset already lets the prompt decide.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum Background {
+    Transparent,
+    Opaque,
+}
+
+impl Background {
+    /// The wire string for the `background` field.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Background::Transparent => "transparent",
+            Background::Opaque => "opaque",
         }
     }
 }
@@ -330,6 +415,72 @@ mod tests {
         assert!(c.json);
         let c = Cli::try_parse_from(["askcodex", "--json", "usage"]).unwrap();
         assert!(c.json);
+    }
+
+    #[test]
+    fn agent_controls_parse_and_reject_unknown_values() {
+        let c = Cli::try_parse_from([
+            "askcodex",
+            "ask",
+            "x",
+            "--verbosity",
+            "low",
+            "--schema",
+            "s.json",
+        ])
+        .unwrap();
+        match c.cmd {
+            Cmd::Ask {
+                verbosity, schema, ..
+            } => {
+                assert_eq!(verbosity, Some(Verbosity::Low));
+                assert_eq!(schema, Some(PathBuf::from("s.json")));
+            }
+            other => panic!("{other:?}"),
+        }
+        let c = Cli::try_parse_from(["askcodex", "ask", "x"]).unwrap();
+        assert!(matches!(
+            c.cmd,
+            Cmd::Ask {
+                verbosity: None,
+                schema: None,
+                ..
+            }
+        ));
+        for sub in [vec!["create", "p"], vec!["edit", "p", "-i", "a.png"]] {
+            let mut argv = vec!["askcodex", "image"];
+            argv.extend(sub.iter().copied());
+            argv.extend(["--background", "transparent"]);
+            Cli::try_parse_from(&argv).unwrap_or_else(|e| panic!("{argv:?}: {e}"));
+        }
+        // `auto` is what an unset flag already means; `max` is not a
+        // verbosity. Both are usage errors, before any credential read.
+        assert!(
+            Cli::try_parse_from(["askcodex", "image", "create", "p", "--background", "auto"])
+                .is_err()
+        );
+        assert!(Cli::try_parse_from(["askcodex", "ask", "x", "--verbosity", "max"]).is_err());
+    }
+
+    #[test]
+    fn backend_requires_json_wherever_either_flag_sits() {
+        for argv in [
+            vec!["askcodex", "--json", "models", "--backend"],
+            vec!["askcodex", "--backend", "models", "--json"],
+            vec!["askcodex", "models", "--json", "--backend"],
+        ] {
+            let cli = Cli::try_parse_from(&argv).unwrap();
+            assert!(cli.check().is_ok(), "{argv:?}");
+        }
+        for argv in [
+            vec!["askcodex", "models", "--backend"],
+            vec!["askcodex", "--events", "usage", "--backend"],
+        ] {
+            let cli = Cli::try_parse_from(&argv).unwrap();
+            let err = cli.check().expect_err("--backend without --json");
+            assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+            assert_eq!(err.exit_code(), 2);
+        }
     }
 
     #[test]

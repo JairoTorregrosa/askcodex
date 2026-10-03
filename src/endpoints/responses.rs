@@ -135,6 +135,7 @@ fn consume_stream<R: BufRead>(
             let payload = snippet(&sse_frame.data);
             Error::SseStream {
                 detail: format!("malformed JSON on a data: line ({source}): {payload}"),
+                backend: None,
             }
         })?;
 
@@ -159,11 +160,7 @@ fn consume_stream<R: BufRead>(
                     .cloned();
                 return Ok(AskAnswer { text, usage });
             }
-            ResponsesSseEvent::Error { raw } => {
-                return Err(Error::SseStream {
-                    detail: snippet(&raw.to_string()),
-                });
-            }
+            ResponsesSseEvent::Error { raw } => return Err(stream_failure(&raw)),
             ResponsesSseEvent::Other => {}
         }
     }
@@ -173,7 +170,32 @@ fn consume_stream<R: BufRead>(
     // failure-masking this project forbids.
     Err(Error::SseStream {
         detail: NO_COMPLETED_DETAIL.to_string(),
+        backend: None,
     })
+}
+
+/// The loud error for a failure event. The message quotes the event type
+/// and the backend's error object (`response.error` of `response.failed`,
+/// `incomplete_details` of `response.incomplete`) rather than the first
+/// bytes of the whole event, which are ids and timestamps; `backend`
+/// carries the same object, verbatim, for machine diagnostics.
+fn stream_failure(raw: &Value) -> Error {
+    let kind = raw.get("type").and_then(Value::as_str).unwrap_or("?");
+    let backend = if kind == "response.incomplete" {
+        let details = raw
+            .get("response")
+            .and_then(|response| response.get("incomplete_details"))
+            .cloned()
+            .unwrap_or(Value::Null);
+        Some(serde_json::json!({ "incomplete_details": details }))
+    } else {
+        crate::error::backend_error_detail(raw)
+    };
+    let quoted = backend.as_ref().unwrap_or(raw).to_string();
+    Error::SseStream {
+        detail: snippet(&format!("{kind}: {quoted}")),
+        backend,
+    }
 }
 
 /// At most `config::ERROR_SNIPPET_BYTES` bytes of `s`, cut on a char
@@ -342,7 +364,7 @@ mod tests {
     fn expect_sse_error(result: Result<AskAnswer, Error>) -> String {
         match result {
             Ok(answer) => panic!("expected a loud error, got Ok({answer:?})"),
-            Err(Error::SseStream { detail }) => detail,
+            Err(Error::SseStream { detail, .. }) => detail,
             Err(other) => panic!("expected Error::SseStream, got {other:?}"),
         }
     }
@@ -637,9 +659,13 @@ mod tests {
         let detail = expect_sse_error(run_ask(&stream, &prompt()).0);
 
         assert!(detail.len() <= config::ERROR_SNIPPET_BYTES);
-        // Nothing was reshaped or re-encoded: the snippet is a genuine
-        // prefix of the event, cut back to the nearest char boundary.
-        assert!(raw.starts_with(&detail));
+        // Nothing was reshaped or re-encoded: after the event-type label,
+        // the snippet is a genuine prefix of the event (it carries no
+        // nested error object), cut back to the nearest char boundary.
+        let quoted = detail
+            .strip_prefix("response.failed: ")
+            .expect("the event type labels the detail");
+        assert!(raw.starts_with(quoted));
         assert!(detail.len() > config::ERROR_SNIPPET_BYTES - 4);
     }
 
@@ -671,6 +697,109 @@ mod tests {
         assert_eq!(mock.calls(), 1, "no retry loop");
     }
 
+    #[test]
+    fn a_rejected_request_keeps_the_backends_error_object_for_machines() {
+        let body = json!({"error": {
+            "message": "Unsupported value: 'none' is not supported with the 'gpt-x' model.",
+            "type": "invalid_request_error", "param": "reasoning.effort",
+            "code": "unsupported_value"}});
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(POST).path("/codex/responses");
+            then.status(400).json_body(body.clone());
+        });
+
+        let mut client = client();
+        let err = ask_at(
+            &mut client,
+            &server.url("/codex/responses"),
+            &prompt(),
+            &mut |_| panic!("no delta for a rejected request"),
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code(), "http_error", "the stable code is unchanged");
+        assert_eq!(err.http_status(), Some(400));
+        assert_eq!(err.backend_detail(), Some(&body["error"]));
+    }
+
+    #[test]
+    fn an_error_body_too_long_to_parse_whole_yields_no_backend_object() {
+        let long =
+            json!({"error": {"code": "x", "message": "y".repeat(config::ERROR_BODY_PARSE_BYTES)}});
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(POST).path("/codex/responses");
+            then.status(400).json_body(long);
+        });
+
+        let mut client = client();
+        let err = ask_at(
+            &mut client,
+            &server.url("/codex/responses"),
+            &prompt(),
+            &mut |_| panic!("no delta"),
+        )
+        .unwrap_err();
+
+        assert_eq!(err.http_status(), Some(400));
+        assert_eq!(err.backend_detail(), None, "a cut document is not parsed");
+        match err {
+            Error::HttpStatus { snippet, .. } => {
+                assert!(snippet.len() <= config::ERROR_SNIPPET_BYTES)
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_failed_event_reports_its_error_object_not_its_ids() {
+        let event = json!({"type": "response.failed", "sequence_number": 3, "response": {
+            "id": "resp_REDACTED", "object": "response", "created_at": 1759771626,
+            "status": "failed", "background": false,
+            "error": {"code": "cyber_policy", "message": "This request was flagged for cyber policy."},
+            "incomplete_details": null}});
+        let stream = frame("response.failed", &event.to_string());
+
+        let (result, _) = run_ask(&stream, &prompt());
+        let err = result.unwrap_err();
+
+        assert_eq!(err.code(), "stream_failed");
+        assert_eq!(err.backend_detail(), Some(&event["response"]["error"]));
+        let message = err.to_string();
+        assert!(message.contains("response.failed: "), "{message}");
+        assert!(message.contains("cyber_policy"), "{message}");
+        assert!(
+            !message.contains("resp_REDACTED"),
+            "ids crowd out the cause: {message}"
+        );
+    }
+
+    #[test]
+    fn an_incomplete_response_is_a_failure_that_says_why() {
+        let event = json!({"type": "response.incomplete", "response": {
+            "status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"}}});
+        let stream = format!(
+            "{}{}",
+            delta_frame("partial answ", 1),
+            frame("response.incomplete", &event.to_string())
+        );
+
+        let (result, deltas) = run_ask(&stream, &prompt());
+        let err = result.unwrap_err();
+
+        assert_eq!(deltas, ["partial answ"], "the fragment streamed live");
+        assert_eq!(
+            err.code(),
+            "stream_failed",
+            "a cut answer is never a result"
+        );
+        assert_eq!(
+            err.backend_detail(),
+            Some(&json!({"incomplete_details": {"reason": "max_output_tokens"}}))
+        );
+    }
+
     // -----------------------------------------------------------------
     // Truncation and malformed payloads
     // -----------------------------------------------------------------
@@ -685,7 +814,8 @@ mod tests {
         assert_eq!(
             "responses stream error: stream ended without response.completed",
             Error::SseStream {
-                detail: NO_COMPLETED_DETAIL.to_string()
+                detail: NO_COMPLETED_DETAIL.to_string(),
+                backend: None,
             }
             .to_string()
         );
