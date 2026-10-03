@@ -93,9 +93,11 @@ isolation, backups kept outside the skills directories (`XDG_DATA_HOME`, name
 collisions, and moving the `askcodex.bak*` siblings older installers left),
 the cross-filesystem copy, verify, publish and remove path (selected by
 refusing the installer's hard-link probe), partial copies that are never
-reused, leftovers that are never offered as a rollback, the printed rollback,
-restoration after a failed or interrupted swap, idempotence, locks, and
-existing directory permissions. The tests remove any inherited
+reused, leftovers that are never offered as a rollback and that later runs
+finish removing (a leftover that still holds a SKILL.md fails the run), skills
+directories shared through a symlink (wired once, one rollback), the printed
+rollback and its refusal when the source is gone, restoration after a failed
+or interrupted swap, idempotence, locks, and existing directory permissions. The tests remove any inherited
 `XDG_DATA_HOME`, so a run never writes to the real data directory.
 
 ---

@@ -186,20 +186,69 @@ skill_with() {
     [[ "$output" == *'(nothing was there before)'* ]]
 }
 
-@test "a claude skills dir that links to the agents one ends with one skill and no sibling backups" {
+@test "skills dirs that are one directory through a symlink are wired and rolled back once" {
+    fake_date
+    # Either direction: the link is never the path that gets wired.
+    for link in claude agents; do
+        rm -rf "$TASK_HOME/.agents" "$TASK_HOME/.claude" "$TASK_HOME/.local/share"
+        if [ "$link" = claude ]; then
+            real=agents
+            mkdir -p "$TASK_HOME/.claude"
+            ln -s ../.agents/skills "$TASK_HOME/.claude/skills"
+        else
+            real=claude
+            mkdir -p "$TASK_HOME/.agents"
+            ln -s ../.claude/skills "$TASK_HOME/.agents/skills"
+        fi
+        dir="$TASK_HOME/.$real/skills"
+        skill_with "$dir/askcodex" old
+        skill_with "$dir/askcodex.bak" original
+        invoke --skills all
+        [ "$status" -eq 0 ]
+        [ -L "$TASK_HOME/.$link/skills" ]
+        no_backups_beside "$dir"
+        [ "$(count_entries "$dir")" -eq 1 ]
+        [ "$(cat "$BACKUPS/$real-askcodex.bak/SKILL.md")" = original ]
+        [ "$(cat "$BACKUPS/$real-$STAMP/SKILL.md")" = old ]
+        [ "$(count_entries "$BACKUPS")" -eq 2 ]
+        [[ "$output" == *"skill  : $TASK_HOME/.$link/skills/askcodex"$'\n'"           is that same directory through a symlink"* ]]
+        [ "$(printf '%s\n' "$output" | grep -c '^  rollback: ')" -eq 1 ]
+        [ "$(printf '%s\n' "$output" | grep -c 'already holds exactly this skill')" -eq 0 ]
+    done
+}
+
+@test "on a shared skills dir a parked skill that cannot leave keeps the only rollback valid" {
+    fake_date
     skill_with "$AGENTS/askcodex" old
-    skill_with "$AGENTS/askcodex.bak" original
     mkdir -p "$TASK_HOME/.claude"
     ln -s ../.agents/skills "$TASK_HOME/.claude/skills"
+    fake_cmd mv 2 '*/skill-backups/*' 'exit 1'
     invoke --skills all
-    [ "$status" -eq 0 ]
-    [ -L "$TASK_HOME/.claude/skills" ]
-    no_backups_beside "$AGENTS"
-    [ "$(cat "$BACKUPS/claude-askcodex.bak/SKILL.md")" = original ]
-    run grep -rl '^old$' "$BACKUPS"
-    [[ "$output" == "$BACKUPS"/claude-2*Z/SKILL.md ]]
-    [ "$(count_entries "$BACKUPS")" -eq 2 ]
-    [ "$(count_entries "$AGENTS")" -eq 1 ]
+    [ "$status" -eq 1 ]
+    held="$AGENTS/askcodex.bak.$STAMP"
+    [ "$(cat "$held/SKILL.md")" = old ]
+    rollback="$(printf '%s\n' "$output" | sed -n 's/^  rollback: //p')"
+    [ "$rollback" = "rm -rf \"$AGENTS/askcodex\" && mv \"$held\" \"$AGENTS/askcodex\"" ]
+    rm "$TASK_ROOT/bin/mv"
+    sh -c "$rollback"
+    [ "$(cat "$AGENTS/askcodex/SKILL.md")" = old ]
+}
+
+@test "a rollback whose source is gone at the end of the run is never printed" {
+    fake_date
+    skill_with "$AGENTS/askcodex" old
+    # A different askcodex earlier on PATH makes the installer compare it
+    # with the binary it wrote; this cmp removes the backup meanwhile.
+    printf '#!/bin/sh\nexit 0\n' >"$TASK_ROOT/bin/askcodex"
+    chmod +x "$TASK_ROOT/bin/askcodex"
+    fake_cmd cmp 2 '*' "rm -rf \"$BACKUPS/agents-$STAMP\"; exit 1"
+    run env -u XDG_DATA_HOME HOME="$TASK_HOME" CODEX_HOME="$TASK_HOME/absent-auth" \
+        PATH="$TASK_ROOT/bin:$TASK_HOME/.local/bin:$PATH" sh "$TASK_REPO/install.sh" --skills agents
+    [ "$status" -eq 1 ]
+    [ ! -e "$BACKUPS/agents-$STAMP" ]
+    [[ "$output" != *'rollback: rm -rf'*'&& mv'* ]]
+    [[ "$output" == *"backup : $BACKUPS/agents-$STAMP no longer exists, so no rollback can be printed"* ]]
+    [[ "$output" == *'1 rollback(s) could not be printed'* ]]
 }
 
 @test "a name already taken in the backup dir, or a partial copy, is never overwritten or reused" {
@@ -247,40 +296,82 @@ skill_with() {
     [ "$(count_entries "$BACKUPS")" -eq 1 ]
 }
 
-@test "when the source cannot be removed after a verified copy, rollback uses the complete backup" {
+# The cross-filesystem path with an old skill that has a subdirectory.
+old_skill_cross_fs() {
     fake_date
     cross_fs
     skill_with "$AGENTS/askcodex" old
     mkdir -p "$AGENTS/askcodex/references"
     printf 'old reference\n' >"$AGENTS/askcodex/references/notes.md"
-    # rm deletes what it can (SKILL.md) and then fails, as it does on a
-    # subdirectory it may not write even after chmod (another owner's).
-    # shellcheck disable=SC2016  # code for the fake rm, expanded there
-    fake_cmd rm 2 '*/askcodex.leftover.*' '"$real" -f "$2/SKILL.md"; exit 1'
-    invoke --skills agents
-    [ "$status" -eq 1 ]
     backup="$BACKUPS/agents-$STAMP"
     left="$AGENTS/askcodex.leftover.$STAMP"
+}
+
+@test "a removal that stops after SKILL.md leaves nothing loadable and rollback uses the backup" {
+    old_skill_cross_fs
+    # rm can unlink the top-level SKILL.md but nothing else, as with a
+    # subdirectory owned by someone else.
+    # shellcheck disable=SC2016  # code for the fake rm, expanded there
+    fake_cmd rm 2 '*/askcodex.leftover.*' '[ "${2##*/}" = SKILL.md ] && exec "$real" "$@"; exit 1'
+    invoke --skills agents
+    [ "$status" -eq 0 ]
     [ "$(cat "$backup/SKILL.md")" = old ]
     [ "$(cat "$backup/references/notes.md")" = 'old reference' ]
     [ ! -e "$left/SKILL.md" ]
     [ -d "$left/references" ]
     no_backups_beside "$AGENTS"
-    [[ "$output" == *"error: the backup at $backup is complete"* ]]
+    [[ "$output" == *"warning: could not remove all of $left. It holds no SKILL.md"* ]]
     [[ "$output" == *"leftover: $left  (incomplete; not a backup"* ]]
-    [[ "$output" == *'1 askcodex backup(s) or leftover(s) are still inside a skills directory'* ]]
     rollback="$(printf '%s\n' "$output" | sed -n 's/^  rollback: //p')"
     [ "$rollback" = "rm -rf \"$AGENTS/askcodex\" && mv \"$backup\" \"$AGENTS/askcodex\"" ]
-    # A later run neither mistakes the leftover for a backup nor deletes it.
+    # A later run finishes the removal and never takes it for a backup.
     rm "$TASK_ROOT/bin/rm"
     invoke --skills agents
     [ "$status" -eq 0 ]
-    [[ "$output" == *"note: $left is the incomplete remainder"* ]]
-    [ -d "$left/references" ]
+    [[ "$output" == *"removed $left, left by an earlier run"* ]]
+    [ ! -e "$left" ]
     [ "$(count_entries "$BACKUPS")" -eq 1 ]
     sh -c "$rollback"
     [ "$(cat "$AGENTS/askcodex/SKILL.md")" = old ]
     [ "$(cat "$AGENTS/askcodex/references/notes.md")" = 'old reference' ]
+}
+
+@test "a leftover that still holds a SKILL.md fails every run until it is removed" {
+    old_skill_cross_fs
+    fake_cmd rm 2 '*/askcodex.leftover.*' 'exit 1'
+    for _ in 1 2; do
+        invoke --skills agents
+        [ "$status" -eq 1 ]
+        [ "$(cat "$left/SKILL.md")" = old ]
+        [[ "$output" == *"error: $left could not be removed and still holds"* ]]
+        [[ "$output" == *'1 askcodex backup(s) or leftover(s) are still inside a skills directory'* ]]
+        [ "$(count_entries "$BACKUPS")" -eq 1 ]
+        [ "$(cat "$backup/references/notes.md")" = 'old reference' ]
+    done
+    rm "$TASK_ROOT/bin/rm"
+    invoke --skills agents
+    [ "$status" -eq 0 ]
+    [ ! -e "$left" ]
+    [ "$(count_entries "$AGENTS")" -eq 1 ]
+}
+
+@test "an interrupted removal leaves a loadable leftover that the next run removes" {
+    old_skill_cross_fs
+    # TERM arrives after the rename to askcodex.leftover.*, before any rm.
+    # shellcheck disable=SC2016  # code for the fake rm, expanded there
+    fake_cmd rm 2 '*/askcodex.leftover.*' 'kill -TERM "$PPID"; exit 1'
+    invoke --skills agents
+    [ "$status" -eq 143 ]
+    [ "$(cat "$backup/SKILL.md")" = old ]
+    [ "$(cat "$left/SKILL.md")" = old ]
+    [ ! -e "$AGENTS/askcodex.lock" ]
+    rm "$TASK_ROOT/bin/rm"
+    invoke --skills agents
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"removed $left, left by an earlier run"* ]]
+    [ "$(count_entries "$AGENTS")" -eq 1 ]
+    [ "$(count_entries "$BACKUPS")" -eq 1 ]
+    [ "$(cat "$backup/references/notes.md")" = 'old reference' ]
 }
 
 @test "a copy that fails partway publishes nothing, is discarded, and prints no hand-typed retry" {

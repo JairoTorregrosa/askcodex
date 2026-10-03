@@ -187,14 +187,38 @@ stranded() {
     printf '       skill. Re-run ./install.sh with the same --skills to retry.\n' >&2
 }
 
-# The source of a backup that is already complete and verified at $2 could
-# not be fully removed from $SKILLS. What is left at $1 is incomplete: it is
-# reported as a leftover to delete, never as a backup or a rollback source.
-leftover() {
-    STRANDED=$((STRANDED + 1))
-    printf 'error: the backup at %s is complete, but\n' "$2" >&2
-    printf '       %s could not be removed. What is left there is incomplete;\n' "$1" >&2
-    printf '       delete it (it may need chmod -R u+w first): rm -rf "%s"\n' "$1" >&2
+# Removes $1, the renamed source of a backup already complete and verified
+# in $BACKUP_ROOT: askcodex.leftover.* is only ever created after that
+# backup was published, so removing it loses nothing. A top-level SKILL.md is
+# what makes a directory a skill, so it goes first: the remainder stops
+# loading even if the rest cannot be removed. Returns 0 when nothing is left.
+# A remainder that still holds a SKILL.md loads as a second, stale askcodex
+# skill and fails the run; one without is reported and does not.
+finish_leftover() {
+    _l="$1"
+    if [ -d "$_l" ] && [ ! -L "$_l" ]; then
+        rm -f "$_l/SKILL.md" 2>/dev/null ||
+            { chmod u+w "$_l" 2>/dev/null && rm -f "$_l/SKILL.md" 2>/dev/null; } || :
+    fi
+    if ! rm -rf "$_l" 2>/dev/null; then
+        chmod -R u+w "$_l" 2>/dev/null || :
+        rm -rf "$_l" 2>/dev/null || :
+    fi
+    if [ ! -e "$_l" ] && [ ! -L "$_l" ]; then
+        return 0
+    fi
+    if [ -e "$_l/SKILL.md" ] || [ -L "$_l/SKILL.md" ]; then
+        STRANDED=$((STRANDED + 1))
+        printf 'error: %s could not be removed and still holds\n' "$_l" >&2
+        printf '       a SKILL.md, so agents load it as a second, stale askcodex skill.\n' >&2
+        printf '       Its backup is complete in %s. Delete it\n' "$BACKUP_ROOT" >&2
+        printf '       (it may need chmod -R u+w or its owner): rm -rf "%s"\n' "$_l" >&2
+    else
+        say "warning: could not remove all of $_l. It holds no SKILL.md, so"
+        say "         agents do not load it; its backup is complete in $BACKUP_ROOT."
+        say "         Delete it: rm -rf \"$_l\""
+    fi
+    return 1
 }
 
 # True when $BACKUP_ROOT and $SKILLS share a mount, so mv between them is one
@@ -248,23 +272,16 @@ stash() {
         return 0
     fi
     # The backup is complete, so the source can go. Rename it out of the
-    # askcodex.bak* namespace first (one rename in $SKILLS), so a delete
-    # that fails or is interrupted never leaves a torn tree that a later
-    # sweep would take for a backup. A read-only subdirectory would stop rm
-    # halfway; making the doomed copy writable changes nothing the user
-    # keeps (cp -p preserved the modes in the backup).
+    # askcodex.bak* namespace first (one rename in $SKILLS), so a removal
+    # that fails or is interrupted never leaves a tree that a later sweep
+    # would take for a backup; any later run finishes removing it. A
+    # read-only subdirectory would stop rm halfway; making the doomed copy
+    # writable changes nothing the user keeps (cp -p kept the modes).
     _doomed="$_src"
     if _left="$(free_path "$DST.leftover.$STAMP")" && mv "$_src" "$_left"; then
         _doomed="$_left"
     fi
-    if ! rm -rf "$_doomed" 2>/dev/null; then
-        chmod -R u+w "$_doomed" 2>/dev/null || :
-        rm -rf "$_doomed" 2>/dev/null || :
-    fi
-    if [ -e "$_doomed" ] || [ -L "$_doomed" ]; then
-        LEFTOVER="$_doomed"
-        leftover "$_doomed" "$STASHED"
-    fi
+    finish_leftover "$_doomed" || LEFTOVER="$_doomed"
 }
 
 # Leaves the destination as it was found, on every path out of the script:
@@ -337,6 +354,17 @@ wire_skill() {
     cp -R "$SRC" "$STAGE" || die "could not stage the skill at $STAGE — $DST was left untouched"
     [ -f "$STAGE/SKILL.md" ] || die "staged skill is incomplete: $STAGE/SKILL.md is missing"
 
+    # Remainders of a source whose backup was already complete, left by a
+    # removal that failed or was interrupted (possibly with the whole old
+    # skill, SKILL.md included, still loading). Not backups: finish them.
+    # This runs before the sweep below, which may leave new ones of its own.
+    for _left in "$DST".leftover.*; do
+        [ -e "$_left" ] || [ -L "$_left" ] || continue
+        if finish_leftover "$_left"; then
+            say "› removed $_left, left by an earlier run; its backup is in $BACKUP_ROOT"
+        fi
+    done
+
     # Backups that earlier installers left beside the destination are
     # askcodex's own, and where they are they load as a second, stale
     # askcodex skill. Move each one out; never delete or overwrite one. A
@@ -353,13 +381,6 @@ wire_skill() {
             say "› moved earlier backup $_old to $STASHED"
             MOVED=$((MOVED + 1))
         fi
-    done
-    # Remainders of a source whose backup was already complete: not backups,
-    # never moved, never deleted by a later run. Just say what they are.
-    for _left in "$DST".leftover.*; do
-        [ -e "$_left" ] || [ -L "$_left" ] || continue
-        say "note: $_left is the incomplete remainder of a backup already"
-        say "      complete in $BACKUP_ROOT. Delete it: rm -rf \"$_left\""
     done
 
     if [ -e "$DST" ] || [ -L "$DST" ]; then
@@ -427,14 +448,50 @@ wire_skill() {
     LOCKED=""
 }
 
+CLAUDE_SKILLS="$HOME/.claude/skills"
+AGENTS_SKILLS="$HOME/.agents/skills"
+WIRE_CLAUDE=0
+WIRE_AGENTS=0
+case "$SKILL_TARGET" in
+claude) WIRE_CLAUDE=1 ;;
+agents) WIRE_AGENTS=1 ;;
+all) WIRE_CLAUDE=1 WIRE_AGENTS=1 ;;
+esac
+
+# Prints directory $1 with every symlink resolved.
+physical() { (CDPATH='' cd -P -- "$1" 2>/dev/null && pwd -P); }
+
+# ~/.claude/skills is often a symlink to ~/.agents/skills (or the reverse).
+# Wiring one physical directory twice lets the second pass sweep up what the
+# first pass parked or reported, and the first pass's rollback would then
+# name a path that no longer exists. A shared directory is wired once,
+# through the path that is not the link, and reported once. ~/.agents/skills
+# is created first so a link pointing at it is not dangling.
+ALIAS=""
+if [ "$WIRE_CLAUDE" -eq 1 ] && [ "$WIRE_AGENTS" -eq 1 ]; then
+    mkdir -p "$AGENTS_SKILLS" || die "cannot create $AGENTS_SKILLS"
+    mkdir -p "$CLAUDE_SKILLS" || die "cannot create $CLAUDE_SKILLS"
+    P_CLAUDE="$(physical "$CLAUDE_SKILLS")" || die "cannot resolve $CLAUDE_SKILLS"
+    P_AGENTS="$(physical "$AGENTS_SKILLS")" || die "cannot resolve $AGENTS_SKILLS"
+    if [ "$P_CLAUDE" = "$P_AGENTS" ]; then
+        if [ -L "$AGENTS_SKILLS" ] && [ ! -L "$CLAUDE_SKILLS" ]; then
+            WIRE_AGENTS=0
+            ALIAS="$AGENTS_SKILLS/askcodex"
+        else
+            WIRE_CLAUDE=0
+            ALIAS="$CLAUDE_SKILLS/askcodex"
+        fi
+    fi
+fi
+
 DST1="" BAK1="" SAME1=0 MOVED1=0 LEFT1=""
 DST2="" BAK2="" SAME2=0 MOVED2=0 LEFT2=""
-if [ "$SKILL_TARGET" = claude ] || [ "$SKILL_TARGET" = all ]; then
-    wire_skill "$HOME/.claude/skills" claude
+if [ "$WIRE_CLAUDE" -eq 1 ]; then
+    wire_skill "$CLAUDE_SKILLS" claude
     DST1="$DST" BAK1="$BAK" SAME1="$SAME" MOVED1="$MOVED" LEFT1="$LEFT"
 fi
-if [ "$SKILL_TARGET" = agents ] || [ "$SKILL_TARGET" = all ]; then
-    wire_skill "$HOME/.agents/skills" agents
+if [ "$WIRE_AGENTS" -eq 1 ]; then
+    wire_skill "$AGENTS_SKILLS" agents
     DST2="$DST" BAK2="$BAK" SAME2="$SAME" MOVED2="$MOVED" LEFT2="$LEFT"
 fi
 
@@ -479,16 +536,22 @@ report_skill() {
     _moved="$4"
     _left="$5"
     say "  skill  : $_dst"
-    if [ -n "$_bak" ]; then
+    if [ -n "$_bak" ] && { [ -e "$_bak" ] || [ -L "$_bak" ]; }; then
         say "  backup : $_bak"
         say "  rollback: rm -rf \"$_dst\" && mv \"$_bak\" \"$_dst\""
-        [ -z "$_left" ] ||
-            say "  leftover: $_left  (incomplete; not a backup — delete it)"
+    elif [ -n "$_bak" ]; then
+        # Never print a rollback whose source is gone: running it would
+        # delete the installed skill and then fail to restore anything.
+        NOROLLBACK=$((NOROLLBACK + 1))
+        say "  backup : $_bak no longer exists, so no rollback can be printed"
     elif [ "$_same" -eq 1 ]; then
         say "  rollback: rm -rf \"$_dst\"  (the skill there was already this one;"
         say "            nothing was replaced by this run)"
     else
         say "  rollback: rm -rf \"$_dst\"  (nothing was there before)"
+    fi
+    if [ -n "$_left" ] && { [ -e "$_left" ] || [ -L "$_left" ]; }; then
+        say "  leftover: $_left  (incomplete; not a backup — delete it)"
     fi
     if [ "$_moved" -gt 0 ]; then
         say "  moved  : $_moved earlier backup(s) from beside $_dst"
@@ -496,13 +559,26 @@ report_skill() {
     fi
 }
 
+NOROLLBACK=0
 say ""
 say "done."
 say "  binary : $BIN  (rollback: rm -f \"$BIN\")"
 [ -z "$DST1" ] || report_skill "$DST1" "$BAK1" "$SAME1" "$MOVED1" "$LEFT1"
 [ -z "$DST2" ] || report_skill "$DST2" "$BAK2" "$SAME2" "$MOVED2" "$LEFT2"
+if [ -n "$ALIAS" ]; then
+    say "  skill  : $ALIAS"
+    say "           is that same directory through a symlink: installed once,"
+    say "           and the rollback above covers it. Run only that one."
+fi
 say ""
 say "run \`$RUN --help\` to start, or \`$RUN auth status --no-refresh\` for token expiry."
-[ "$STRANDED" -eq 0 ] ||
-    die "$STRANDED askcodex backup(s) or leftover(s) are still inside a skills directory,
-       named above. The binary and the new skill are installed."
+if [ "$STRANDED" -gt 0 ] || [ "$NOROLLBACK" -gt 0 ]; then
+    WHY=""
+    [ "$STRANDED" -eq 0 ] ||
+        WHY="$STRANDED askcodex backup(s) or leftover(s) are still inside a skills directory"
+    [ "$NOROLLBACK" -eq 0 ] ||
+        WHY="${WHY:+$WHY;
+       }$NOROLLBACK rollback(s) could not be printed"
+    die "$WHY, named above.
+       The binary and the new skill are installed."
+fi
