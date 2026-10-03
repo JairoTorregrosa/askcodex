@@ -61,8 +61,8 @@ the user the useful output with its saved path.
   513.
 - `--schema FILE` makes the backend enforce a JSON Schema in strict mode, even against a prompt
   that asks for prose. Strict rules: every property in `required`, `"additionalProperties": false`
-  on every object, optional values typed `["string","null"]` (an `enum` must list `null` too). A
-  schema that breaks them fails before generation with `error.backend.code:
+  on every object, and an optional value adds `"null"` to its own type (`["string","null"]`,
+  `["integer","null"]`; an `enum` must list `null` too). A schema that breaks them fails before generation with `error.backend.code:
   "invalid_json_schema"` and a message naming the key. With `--json`, `.result.json` is the parsed
   answer. askcodex re-checks its structure against the schema, so an answer that does not parse
   or does not match is a `response_invalid` failure, never a result.
