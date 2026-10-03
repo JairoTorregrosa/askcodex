@@ -141,7 +141,7 @@ Options:
       --client-version <CLIENT_VERSION>
           Client version reported to the backend (required query param)
 
-          [default: 0.157.1]
+          [default: 0.160.0]
 
       --json
           One versioned JSON result (raw commands preserve the wire response)
@@ -266,7 +266,7 @@ Options:
       --model <MODEL>
           Model slug (see `askcodex models`)
 
-          [default: gpt-6-sol]
+          [default: gpt-6.1-sol]
 
       --events
           Versioned newline-delimited JSON events for semantic commands

@@ -80,7 +80,7 @@ literal header key `"originator"` = `originator().header_value`, plus `USER_AGEN
 ```
 e.g. `codex_cli_rs/0.147.0 (Macintosh 26.0.0; arm64) <terminal-ua>`.
 The backend does not validate the exact UA — any codex-style string works `[verified-live 2026-08-07]`
-(askcodex sends `config::USER_AGENT`, currently `codex_cli_rs/0.157.1 (askcodex)`, and gets 200s;
+(askcodex sends `config::USER_AGENT`, currently `codex_cli_rs/0.160.0 (askcodex)`, and gets 200s;
 on 2026-09-27 the old `0.147.0` UA still reached `gpt-6-astra` through `/codex/responses`, so the UA
 does not gate model access — only the catalog's `client_version` filter does, §3.3). The CLI
 sends a codex-style UA built from its own version; it must **not** claim to be a browser.
@@ -180,8 +180,8 @@ profile endpoint]`.
 ### 3.3 `GET /codex/models?client_version=<v>` — model catalog
 `[verified-live 2026-08-07, 2026-09-27]`; the 2026-08-07 document is sanitized in
 [`samples/models.json`](samples/models.json) and kept as the decoding fixture. The `client_version`
-query param is required (askcodex defaults it to `config::CLIENT_VERSION`, `0.157.1` since
-2026-09-27). Response: `{ "models": [ … ] }`;
+query param is required (askcodex defaults it to `config::CLIENT_VERSION`: `0.157.1` from
+2026-09-27, `0.160.0` from 2026-10-02). Response: `{ "models": [ … ] }`;
 each model object has ~50 fields — the semantically relevant ones:
 `slug`, `display_name`, `visibility` (`list`|`hide`), `input_modalities` (`["text","image"]` for all 8),
 `context_window` (272000), `default_reasoning_level`, `supported_reasoning_levels[].effort`,
@@ -207,7 +207,21 @@ carries `minimal_client_version`; a model newer than the requested `client_versi
 flagged. With `client_version=0.147.0` the catalog had 7 models and no `gpt-6-*`; with `0.157.1` it
 had 10. The gpt-6 minimums are `0.153.0` (astra) and `0.155.0` (sol, luna). A stale default therefore
 hides new models silently, which is why `config::CLIENT_VERSION` tracks the latest stable Codex
-release. `/codex/responses` does not apply this filter: `gpt-6-astra` answered with the `0.147.0` UA.
+release. `/codex/responses` does not apply this filter: `gpt-6-astra` answered with the `0.147.0` UA,
+and `gpt-6.1-sol` with the `0.157.1` UA.
+
+**`minimal_client_version` is not the whole gate.** `[verified-live 2026-10-02]` `gpt-6.1-sol`
+carries `minimal_client_version: "0.153.0"`, yet the catalog omitted it for every `client_version`
+tried up to `0.158.5` and listed it from `0.159.0` (Codex 0.159.0 is the first release to know it).
+The server applies a further, undocumented version gate, so only a current `client_version` shows
+the current catalog.
+
+Live catalog on 2026-10-02 (`client_version=0.160.0`, 11 models): the table below plus
+`gpt-6.1-sol` (list, low→ultra, default `low`, priority 1, "Latest workhorse model for coding and
+everyday work.", `availability_nux`: "Maximize usage with GPT-6.1 Sol. Try it on complex work for
+near-Astra performance at a lower cost."). Changes against 2026-09-27: `gpt-6-sol` is now "Previous
+generation workhorse model." with default `medium`; `gpt-5.6-sol` is "Older generation workhorse
+model."; `gpt-5.5`'s `upgrade` target is `gpt-6.1-sol` (retirement date unchanged).
 
 Live catalog on 2026-09-27 (`client_version=0.157.1`, 10 models; efforts as the catalog lists them):
 
