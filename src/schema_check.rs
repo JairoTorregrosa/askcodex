@@ -312,6 +312,17 @@ impl Checker<'_> {
         if !schema.keys().all(|key| known(key)) {
             return false;
         }
+        // A bound in a shape the checker does not read is not evaluated.
+        let unread_bound = schema.iter().any(|(key, bound)| match key.as_str() {
+            "exclusiveMinimum" | "exclusiveMaximum" => !bound.is_number() && !bound.is_boolean(),
+            "minimum" | "maximum" | "minLength" | "maxLength" | "minItems" | "maxItems" => {
+                !bound.is_number()
+            }
+            _ => false,
+        });
+        if unread_bound {
+            return false;
+        }
         let subschemas = schema
             .get("properties")
             .and_then(Value::as_object)
@@ -351,18 +362,29 @@ impl Checker<'_> {
         value: &Value,
         at: &str,
     ) -> Result<(), Violation> {
-        use std::cmp::Ordering::{Greater, Less};
+        use std::cmp::Ordering::{Equal, Greater, Less};
         if let Value::Number(number) = value {
             // `None` (no bound, or a bound that is not a number) passes.
             let against = |key| match schema.get(key) {
                 Some(Value::Number(bound)) => compare_numbers(number, bound),
                 _ => None,
             };
-            if against("minimum") == Some(Less) {
-                return fail(at, "number is below minimum");
+            // Draft-07 and earlier: `exclusiveMinimum: true` makes `minimum`
+            // exclusive.
+            let draft_07_exclusive = |key| schema.get(key) == Some(&Value::Bool(true));
+            match against("minimum") {
+                Some(Less) => return fail(at, "number is below minimum"),
+                Some(Equal) if draft_07_exclusive("exclusiveMinimum") => {
+                    return fail(at, "number is not above exclusiveMinimum");
+                }
+                _ => {}
             }
-            if against("maximum") == Some(Greater) {
-                return fail(at, "number is above maximum");
+            match against("maximum") {
+                Some(Greater) => return fail(at, "number is above maximum"),
+                Some(Equal) if draft_07_exclusive("exclusiveMaximum") => {
+                    return fail(at, "number is not below exclusiveMaximum");
+                }
+                _ => {}
             }
             if against("exclusiveMinimum").is_some_and(|o| o != Greater) {
                 return fail(at, "number is not above exclusiveMinimum");
@@ -596,6 +618,17 @@ mod tests {
                                "patternProperties": {"^S_": {"type": "string"}}});
         assert!(check(&patterned, &json!({"id": 1, "S_name": "ok"})).is_ok());
         assert!(check(&patterned, &json!({"id": "1"})).is_err());
+        // Draft-07 boolean exclusive bounds, alone and under `not`; a bound
+        // the checker cannot read never makes `not` reject.
+        let above_5 = json!({"minimum": 5, "exclusiveMinimum": true});
+        assert!(check(&above_5, &json!(5)).is_err());
+        assert!(check(&above_5, &json!(6)).is_ok());
+        let not_above_5 = json!({"not": above_5});
+        assert!(check(&not_above_5, &json!(5)).is_ok());
+        assert!(check(&not_above_5, &json!(6)).is_err());
+        let below_5 = json!({"maximum": 5, "exclusiveMaximum": true});
+        assert!(check(&below_5, &json!(5)).is_err());
+        assert!(check(&json!({"not": {"minimum": "5"}}), &json!(1)).is_ok());
     }
 
     #[test]
