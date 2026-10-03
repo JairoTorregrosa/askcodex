@@ -59,7 +59,8 @@ source text in the prompt; a file path alone does not give the model its content
 uses its default (observed: medium). `--schema FILE` makes the backend enforce a
 JSON Schema in strict mode (every property listed in `required`,
 `additionalProperties: false`); `--json` then returns the parsed answer as
-`result.json`, and an answer that does not parse fails instead of passing as text.
+`result.json`. askcodex re-checks the answer's structure against the schema, so
+an answer that does not parse or does not match fails instead of passing.
 `askcodex models` lists each model's description, catalog efforts, Codex's
 default effort, and any retirement date; use it to choose `--model` and `--effort`.
 `ask` defaults to `gpt-6.1-sol`. If your plan refuses it (OpenAI's Codex docs

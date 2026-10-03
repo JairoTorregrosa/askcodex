@@ -30,6 +30,7 @@ mod input;
 pub mod models;
 mod redact;
 mod run;
+mod schema_check;
 mod sse;
 
 pub use cli::Cli;

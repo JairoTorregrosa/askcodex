@@ -2125,8 +2125,11 @@ fn image_json_reports_pixels_alpha_and_the_backend_background() {
 fn a_schema_answer_is_returned_parsed() {
     let mut out = Recorder::default();
     let mut err = Recorder::default();
+    let schema = json!({"type": "object", "additionalProperties": false,
+                        "required": ["product", "severity"],
+                        "properties": {"product": {"type": "string"}, "severity": {"type": "integer"}}});
     let settings = AskSettings {
-        structured: true,
+        schema: Some(&schema),
         verbosity: Some("low"),
         ..AskSettings::new("m", Some("low"))
     };
@@ -2145,8 +2148,9 @@ fn a_schema_answer_that_is_not_json_is_a_failure_not_a_result() {
     for text in ["", "Sure! Here is the JSON:", "{\"cut\": "] {
         let mut out = Recorder::default();
         let mut err = Recorder::default();
+        let schema = json!({});
         let settings = AskSettings {
-            structured: true,
+            schema: Some(&schema),
             ..AskSettings::new("m", None)
         };
         let failure =
@@ -2165,8 +2169,9 @@ fn a_failed_schema_answer_never_quotes_the_answer_and_never_rounds() {
     ] {
         let mut out = Recorder::default();
         let mut err = Recorder::default();
+        let schema = json!({});
         let settings = AskSettings {
-            structured: true,
+            schema: Some(&schema),
             ..AskSettings::new("m", None)
         };
         let failure =
@@ -2181,6 +2186,40 @@ fn a_failed_schema_answer_never_quotes_the_answer_and_never_rounds() {
         );
         assert!(!failure.to_string().contains(SENTINEL));
         assert!(out.bytes.is_empty());
+    }
+}
+
+#[test]
+fn a_parsed_answer_that_breaks_the_schema_is_a_failure_not_a_result() {
+    // The backend enforced the schema in every live call, but that is an
+    // observation: a well-formed answer of the wrong shape must still fail.
+    let schema = json!({"type": "object", "additionalProperties": false,
+                        "required": ["name", "severity"],
+                        "properties": {"name": {"type": "string"},
+                                       "severity": {"type": "integer", "enum": [1, 2, 3]}}});
+    for text in [
+        r#"{"name": "PRIVATE-SENTINEL-4417"}"#,
+        r#"{"name": "PRIVATE-SENTINEL-4417", "severity": 9}"#,
+        r#"{"name": "PRIVATE-SENTINEL-4417", "severity": 1, "extra": true}"#,
+    ] {
+        let mut out = Recorder::default();
+        let mut err = Recorder::default();
+        let settings = AskSettings {
+            schema: Some(&schema),
+            ..AskSettings::new("m", None)
+        };
+        let failure =
+            emit_ask(true, settings, &mut out, &mut err, |_| Ok(answer(text))).unwrap_err();
+        assert_eq!(failure.code(), "response_invalid", "{text}");
+        assert!(
+            failure.to_string().contains("does not match the schema"),
+            "{failure}"
+        );
+        assert!(
+            !failure.to_string().contains("PRIVATE-SENTINEL"),
+            "{failure}"
+        );
+        assert!(out.bytes.is_empty(), "no result for {text}");
     }
 }
 

@@ -383,6 +383,9 @@ Extra headers: `OpenAI-Beta: responses=experimental`, `Accept: text/event-stream
 - An unknown model → HTTP 400 `{"detail": "The '<slug>' model is not supported when using Codex
   with a ChatGPT account."}` (no `error` object).
 
+Strict enforcement is a dated observation, so askcodex re-checks each `--schema` answer's structure
+locally (`src/schema_check.rs`) and fails with `response_invalid` on a mismatch.
+
 Since 0.3.0 the machine error diagnostic carries `http_status` and the backend's error object as
 `backend` (OUTPUT.md). Codex treats `response.incomplete` as terminal (interrupted) and maps
 `response.failed` codes such as `context_length_exceeded`, `insufficient_quota`, `cyber_policy`

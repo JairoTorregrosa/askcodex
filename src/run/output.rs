@@ -126,8 +126,8 @@ pub(super) struct AskSettings<'a> {
     pub model: &'a str,
     pub effort: Option<&'a str>,
     pub verbosity: Option<&'a str>,
-    /// `--schema` was given: the answer must parse as JSON.
-    pub structured: bool,
+    /// The `--schema` document: the answer must parse as JSON and match it.
+    pub schema: Option<&'a Value>,
 }
 
 impl<'a> AskSettings<'a> {
@@ -136,7 +136,7 @@ impl<'a> AskSettings<'a> {
             model,
             effort,
             verbosity: None,
-            structured: false,
+            schema: None,
         }
     }
 }
@@ -184,12 +184,13 @@ where
     let text = answer.text;
 
     // With `--schema` the backend enforces the schema, so an answer that
-    // does not parse means the contract broke (or the model returned
-    // nothing). That is a failure, never a result with a missing `json`.
-    let json = if settings.structured {
-        Some(parse_structured_answer(&text)?)
-    } else {
-        None
+    // does not parse, or parses into the wrong shape, means the contract
+    // broke (or the model returned nothing). The backend's enforcement is a
+    // dated observation, so the shape is re-checked here. Either failure is
+    // an error, never a result with a missing or unchecked `json`.
+    let json = match settings.schema {
+        Some(schema) => Some(parse_structured_answer(&text, schema)?),
+        None => None,
     };
 
     // Said once, before either rendering: an empty answer is a real
@@ -228,10 +229,10 @@ where
 
 /// The answer is never quoted in the error: it can hold the private data
 /// the schema was extracting, and stderr ends up in logs.
-fn parse_structured_answer(text: &str) -> Result<Value, Error> {
+fn parse_structured_answer(text: &str, schema: &Value) -> Result<Value, Error> {
     use crate::input::{ExactJsonError, parse_exact_json};
     let chars = text.chars().count();
-    parse_exact_json(text).map_err(|error| Error::UnexpectedResponse {
+    let answer = parse_exact_json(text).map_err(|error| Error::UnexpectedResponse {
         context: match error {
             ExactJsonError::Syntax(source) => format!(
                 "--schema answer is not valid JSON ({source}; {chars} characters, not quoted)"
@@ -242,7 +243,13 @@ fn parse_structured_answer(text: &str) -> Result<Value, Error> {
                  strings in the schema"
             ),
         },
-    })
+    })?;
+    crate::schema_check::check(schema, &answer).map_err(|violation| Error::UnexpectedResponse {
+        context: format!(
+            "--schema answer does not match the schema {violation} ({chars} characters, not quoted)"
+        ),
+    })?;
+    Ok(answer)
 }
 
 pub(super) fn render_whoami(who: &models::WhoamiOutput) -> String {

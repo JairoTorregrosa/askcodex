@@ -198,13 +198,12 @@ fn run_backend(
         } => {
             let effort = effort.map(|e| e.as_str().to_string());
             let verbosity = verbosity.map(|v| v.as_str().to_string());
-            let structured = schema.is_some();
             let request =
                 ResponsesRequest::user_text(model.clone(), prompt, instructions, effort.clone())
-                    .with_text(verbosity.clone(), schema);
+                    .with_text(verbosity.clone(), schema.clone());
             let settings = AskSettings {
                 verbosity: verbosity.as_deref(),
-                structured,
+                schema: schema.as_ref(),
                 ..AskSettings::new(&model, effort.as_deref())
             };
             emit_ask(mode, settings, out, err, |on_delta| {
