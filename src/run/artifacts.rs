@@ -136,6 +136,10 @@ pub(super) fn png_facts(png: &[u8]) -> Option<PngFacts> {
     }
     let width = u32::from_be_bytes(ihdr[8..12].try_into().ok()?);
     let height = u32::from_be_bytes(ihdr[12..16].try_into().ok()?);
+    // PNG forbids a zero dimension; such a header describes no image.
+    if width == 0 || height == 0 {
+        return None;
+    }
     // Gray, truecolor and palette images can all carry simple transparency
     // in a `tRNS` chunk; only gray+alpha and RGBA always have a channel.
     let alpha_channel = match ihdr[17] {

@@ -283,7 +283,9 @@ impl Checker<'_> {
             "minLength",
             "maxLength",
         ];
-        const ANNOTATIONS: [&str; 12] = [
+        const ANNOTATIONS: [&str; 14] = [
+            "writeOnly",
+            "additionalItems",
             "$ref",
             "$defs",
             "definitions",
@@ -307,7 +309,7 @@ impl Checker<'_> {
         };
         let next = depth + 1;
         let known = |key: &str| EVALUATED.contains(&key) || ANNOTATIONS.contains(&key);
-        if !schema.keys().all(|key| known(key) || key == "writeOnly") {
+        if !schema.keys().all(|key| known(key)) {
             return false;
         }
         let subschemas = schema
@@ -316,12 +318,13 @@ impl Checker<'_> {
             .into_iter()
             .flat_map(|properties| properties.values())
             .chain(
-                ["items", "additionalProperties", "not"]
+                ["items", "additionalItems", "additionalProperties", "not"]
                     .iter()
-                    .filter_map(|k| schema.get(*k)),
+                    .filter_map(|k| schema.get(*k))
+                    .filter(|sub| !sub.is_array()),
             )
             .chain(
-                ["prefixItems", "anyOf", "allOf", "oneOf"]
+                ["items", "prefixItems", "anyOf", "allOf", "oneOf"]
                     .iter()
                     .filter_map(|k| schema.get(*k).and_then(Value::as_array))
                     .flatten(),
@@ -427,16 +430,26 @@ impl Checker<'_> {
         if bound("maxItems").is_some_and(|max| count > max) {
             return fail(at, "array has more items than maxItems");
         }
-        let prefix = schema
-            .get("prefixItems")
-            .and_then(Value::as_array)
-            .map_or(&[][..], Vec::as_slice);
+        // Draft-07 spelled tuples as an `items` array (with
+        // `additionalItems` for the rest); 2020-12 uses `prefixItems` and a
+        // single-schema `items`. Both are read rather than misreading the
+        // older form as a malformed schema.
+        let (prefix, rest) = match schema.get("items") {
+            Some(Value::Array(tuple)) => (tuple.as_slice(), schema.get("additionalItems")),
+            rest => (
+                schema
+                    .get("prefixItems")
+                    .and_then(Value::as_array)
+                    .map_or(&[][..], Vec::as_slice),
+                rest,
+            ),
+        };
         for (index, item) in items.iter().enumerate() {
             let path = child(at, &index.to_string());
             match prefix.get(index) {
                 Some(position) => self.check(position, item, &path, depth)?,
                 None => {
-                    if let Some(rest) = schema.get("items") {
+                    if let Some(rest) = rest {
                         self.check(rest, item, &path, depth)?;
                     }
                 }
@@ -564,6 +577,15 @@ mod tests {
         let recursive =
             json!({"$defs": {"t": {"not": {"$ref": "#/$defs/t"}}}, "$ref": "#/$defs/t"});
         let _ = check(&recursive, &json!(1));
+    }
+
+    #[test]
+    fn draft_07_tuple_items_are_read_as_tuples() {
+        let tuple = json!({"type": "array", "items": [{"type": "string"}, {"type": "integer"}]});
+        assert!(check(&tuple, &json!(["a", 1, true])).is_ok());
+        assert!(check(&tuple, &json!([1, "a"])).is_err());
+        let closed = json!({"items": [{"type": "string"}], "additionalItems": false});
+        assert!(check(&closed, &json!(["a", "b"])).is_err());
     }
 
     #[test]
