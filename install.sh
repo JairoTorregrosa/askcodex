@@ -139,17 +139,21 @@ esac
 
 # State shared with the EXIT trap. Each wire_skill call resets it; the trap
 # only ever has to unwind the destination currently in flight. HELD is the
-# previous skill parked beside $DST during the swap; BAK is where it ends up.
+# previous skill parked beside $DST during the swap; BAK is where it ends up;
+# LEFT is an incomplete remainder of HELD that could not be deleted.
 DST=""
 STAGE=""
 LOCK=""
 HELD=""
 BAK=""
+LEFT=""
 SAME=0
 SWAPPED=0
 LOCKED=""
 MOVED=0
 STRANDED=0
+STASHED=""
+LEFTOVER=""
 
 # Prints the first of $1, $1.1 … $1.99 that does not exist, so a backup is
 # never overwritten and never moved into another backup. Names under
@@ -166,19 +170,101 @@ free_path() {
     printf '%s\n' "$_cand"
 }
 
-# A backup that could not leave a skills directory. The skill it holds is
-# intact (mv never removes a source it failed to copy), but where it sits a
-# host loads it as a second, stale askcodex skill: that is the state this
-# installer exists to prevent, so the run goes on to finish what it can and
-# then exits nonzero instead of reporting a clean install.
+# A tree in $SKILLS that this run could not finish taking out. Where it sits,
+# a host may load it as a second, stale askcodex skill: the state this
+# installer exists to prevent. So the run finishes what it can and then exits
+# nonzero instead of reporting a clean install.
+#
+# There is no hand-typed retry here: a path in $BACKUP_ROOT may hold a partial
+# copy from the failed attempt, and `mv src existing_dir` would nest the
+# source inside it. A re-run picks a fresh name and verifies before it
+# publishes.
 stranded() {
     STRANDED=$((STRANDED + 1))
-    printf 'error: could not move %s\n' "$1" >&2
-    printf '       to %s.\n' "$2" >&2
-    printf '       It is still in %s, where agents load it as a second,\n' "$SKILLS" >&2
-    printf '       stale askcodex skill. Move it by hand:\n' >&2
-    printf '         mkdir -p "%s" && mv "%s" "%s"\n' "$BACKUP_ROOT" "$1" "$2" >&2
-    printf '       or re-run ./install.sh with the same --skills, which retries the move.\n' >&2
+    printf 'error: could not back up %s\n' "$1" >&2
+    printf '       into %s. It is intact and still in\n' "$BACKUP_ROOT" >&2
+    printf '       %s, where agents load it as a second, stale askcodex\n' "$SKILLS" >&2
+    printf '       skill. Re-run ./install.sh with the same --skills to retry.\n' >&2
+}
+
+# The source of a backup that is already complete and verified at $2 could
+# not be fully removed from $SKILLS. What is left at $1 is incomplete: it is
+# reported as a leftover to delete, never as a backup or a rollback source.
+leftover() {
+    STRANDED=$((STRANDED + 1))
+    printf 'error: the backup at %s is complete, but\n' "$2" >&2
+    printf '       %s could not be removed. What is left there is incomplete;\n' "$1" >&2
+    printf '       delete it (it may need chmod -R u+w first): rm -rf "%s"\n' "$1" >&2
+}
+
+# True when $BACKUP_ROOT and $SKILLS share a mount, so mv between them is one
+# rename(2). link(2) refuses to cross a mount exactly where rename(2) does. A
+# probe that fails for any other reason, or a filesystem without hard links,
+# only selects the copy path, which is safe everywhere.
+same_fs() {
+    _probe="$LOCK/fs-probe"
+    _peer="$(free_path "$BACKUP_ROOT/.fs-probe-$LABEL")" || return 1
+    : >"$_probe" 2>/dev/null || return 1
+    _rc=1
+    ! ln "$_probe" "$_peer" 2>/dev/null || _rc=0
+    rm -f "$_probe" "$_peer" 2>/dev/null || :
+    return "$_rc"
+}
+
+# Takes $1, a tree of askcodex's own in $SKILLS, out to $BACKUP_ROOT/$2 (or
+# $2.<n> if taken). Sets STASHED to the complete backup, or "" if none was
+# made (then $1 is untouched), and LEFTOVER to an incomplete remainder of $1
+# that could not be removed after its backup was complete.
+stash() {
+    STASHED=""
+    LEFTOVER=""
+    _src="$1"
+    if ! _to="$(free_path "$BACKUP_ROOT/$2")"; then
+        stranded "$_src"
+        return 0
+    fi
+    if [ -L "$_src" ] || same_fs; then
+        # One rename, or one symlink re-created: complete or not at all.
+        if mv "$_src" "$_to"; then STASHED="$_to"; else stranded "$_src"; fi
+        return 0
+    fi
+    # Across filesystems mv copies and then deletes, and a delete that stops
+    # halfway leaves a torn tree at the source. So: copy under a fresh hidden
+    # name, verify, publish with a rename inside $BACKUP_ROOT, and only then
+    # remove the source. A final name never holds a partial copy, and a
+    # failed copy is discarded, never reused.
+    if _tmp="$(free_path "$BACKUP_ROOT/.incoming-$2")" &&
+        cp -PRp "$_src" "$_tmp" &&
+        diff -r "$_src" "$_tmp" >/dev/null 2>&1 &&
+        [ ! -e "$_to" ] && [ ! -L "$_to" ] &&
+        mv "$_tmp" "$_to"; then
+        STASHED="$_to"
+    else
+        if [ -n "${_tmp:-}" ] && { [ -e "$_tmp" ] || [ -L "$_tmp" ]; }; then
+            chmod -R u+w "$_tmp" 2>/dev/null || :
+            rm -rf "$_tmp" 2>/dev/null || :
+        fi
+        stranded "$_src"
+        return 0
+    fi
+    # The backup is complete, so the source can go. Rename it out of the
+    # askcodex.bak* namespace first (one rename in $SKILLS), so a delete
+    # that fails or is interrupted never leaves a torn tree that a later
+    # sweep would take for a backup. A read-only subdirectory would stop rm
+    # halfway; making the doomed copy writable changes nothing the user
+    # keeps (cp -p preserved the modes in the backup).
+    _doomed="$_src"
+    if _left="$(free_path "$DST.leftover.$STAMP")" && mv "$_src" "$_left"; then
+        _doomed="$_left"
+    fi
+    if ! rm -rf "$_doomed" 2>/dev/null; then
+        chmod -R u+w "$_doomed" 2>/dev/null || :
+        rm -rf "$_doomed" 2>/dev/null || :
+    fi
+    if [ -e "$_doomed" ] || [ -L "$_doomed" ]; then
+        LEFTOVER="$_doomed"
+        leftover "$_doomed" "$STASHED"
+    fi
 }
 
 # Leaves the destination as it was found, on every path out of the script:
@@ -196,6 +282,7 @@ cleanup() {
                 printf '       it is at %s\n' "$HELD" >&2
             fi
         fi
+        rm -f "$LOCK/fs-probe" 2>/dev/null || :
         rmdir "$LOCK" 2>/dev/null || :
     fi
     return "$_status"
@@ -216,6 +303,7 @@ wire_skill() {
     LOCK="$DST.lock"
     HELD=""
     BAK=""
+    LEFT=""
     SAME=0
     SWAPPED=0
     LOCKED=""
@@ -252,22 +340,26 @@ wire_skill() {
     # Backups that earlier installers left beside the destination are
     # askcodex's own, and where they are they load as a second, stale
     # askcodex skill. Move each one out; never delete or overwrite one. A
-    # leftover from a final move that failed below has the same shape and
-    # is retried here. Only askcodex.bak and askcodex.bak.* are touched:
-    # every other entry in $SKILLS belongs to someone else. This runs after
+    # parked skill whose backup failed below has the same shape and is
+    # retried here. Only askcodex.bak and askcodex.bak.* are moved: every
+    # other entry in $SKILLS belongs to someone else. This runs after
     # staging succeeded, so a run that cannot stage changes nothing here.
     for _old in "$DST.bak" "$DST".bak.*; do
         [ -e "$_old" ] || [ -L "$_old" ] || continue
         mkdir -p "$BACKUP_ROOT" ||
             die "cannot create $BACKUP_ROOT to move $_old out of $SKILLS — $DST was left untouched"
-        _to="$(free_path "$BACKUP_ROOT/$LABEL-${_old##*/}")" ||
-            die "too many backups named $LABEL-${_old##*/}* in $BACKUP_ROOT — move some aside by hand"
-        if mv "$_old" "$_to"; then
-            say "› moved earlier backup $_old to $_to"
+        stash "$_old" "$LABEL-${_old##*/}"
+        if [ -n "$STASHED" ]; then
+            say "› moved earlier backup $_old to $STASHED"
             MOVED=$((MOVED + 1))
-        else
-            stranded "$_old" "$_to"
         fi
+    done
+    # Remainders of a source whose backup was already complete: not backups,
+    # never moved, never deleted by a later run. Just say what they are.
+    for _left in "$DST".leftover.*; do
+        [ -e "$_left" ] || [ -L "$_left" ] || continue
+        say "note: $_left is the incomplete remainder of a backup already"
+        say "      complete in $BACKUP_ROOT. Delete it: rm -rf \"$_left\""
     done
 
     if [ -e "$DST" ] || [ -L "$DST" ]; then
@@ -284,7 +376,7 @@ wire_skill() {
             # touched: the backup directory and a free name in it.
             mkdir -p "$BACKUP_ROOT" ||
                 die "cannot create $BACKUP_ROOT for the previous skill — nothing was replaced"
-            BAK="$(free_path "$BACKUP_ROOT/$LABEL-$STAMP")" ||
+            free_path "$BACKUP_ROOT/$LABEL-$STAMP" >/dev/null ||
                 die "too many backups named $LABEL-$STAMP* in $BACKUP_ROOT — nothing was replaced"
             # Two renames inside $SKILLS: park the old tree beside $DST,
             # then rename the new one into place. Each is atomic, so $DST
@@ -315,13 +407,16 @@ wire_skill() {
 
     # The new skill is in place; now take the old one out of $SKILLS. A
     # failure here does not undo the install (the new skill is complete and
-    # correct), but the old one stays where hosts load it: stranded() says so
-    # with both paths, and the run exits nonzero after finishing.
+    # correct), and the run exits nonzero after finishing. The rollback
+    # source is the verified backup whenever one exists, even if removing
+    # the parked copy failed; otherwise it is the parked copy, untouched.
     if [ -n "$HELD" ]; then
-        if [ ! -e "$BAK" ] && [ ! -L "$BAK" ] && mv "$HELD" "$BAK"; then
+        stash "$HELD" "$LABEL-$STAMP"
+        if [ -n "$STASHED" ]; then
+            BAK="$STASHED"
+            LEFT="$LEFTOVER"
             say "› previous skill backed up to $BAK"
         else
-            stranded "$HELD" "$BAK"
             BAK="$HELD"
         fi
     fi
@@ -332,15 +427,15 @@ wire_skill() {
     LOCKED=""
 }
 
-DST1="" BAK1="" SAME1=0 MOVED1=0
-DST2="" BAK2="" SAME2=0 MOVED2=0
+DST1="" BAK1="" SAME1=0 MOVED1=0 LEFT1=""
+DST2="" BAK2="" SAME2=0 MOVED2=0 LEFT2=""
 if [ "$SKILL_TARGET" = claude ] || [ "$SKILL_TARGET" = all ]; then
     wire_skill "$HOME/.claude/skills" claude
-    DST1="$DST" BAK1="$BAK" SAME1="$SAME" MOVED1="$MOVED"
+    DST1="$DST" BAK1="$BAK" SAME1="$SAME" MOVED1="$MOVED" LEFT1="$LEFT"
 fi
 if [ "$SKILL_TARGET" = agents ] || [ "$SKILL_TARGET" = all ]; then
     wire_skill "$HOME/.agents/skills" agents
-    DST2="$DST" BAK2="$BAK" SAME2="$SAME" MOVED2="$MOVED"
+    DST2="$DST" BAK2="$BAK" SAME2="$SAME" MOVED2="$MOVED" LEFT2="$LEFT"
 fi
 
 # What the user should type afterwards: the bare name only if the bare name
@@ -374,17 +469,21 @@ case ":${PATH-}:" in
 esac
 
 # Per-destination backup and rollback lines for the report below. The
-# rollback names wherever the previous skill really is: the backup directory,
-# or its parked path beside the destination if the final move failed.
+# rollback names wherever a complete copy of the previous skill really is:
+# the verified backup, or the untouched parked copy beside the destination
+# if no backup could be made. A leftover is never a rollback source.
 report_skill() {
     _dst="$1"
     _bak="$2"
     _same="$3"
     _moved="$4"
+    _left="$5"
     say "  skill  : $_dst"
     if [ -n "$_bak" ]; then
         say "  backup : $_bak"
         say "  rollback: rm -rf \"$_dst\" && mv \"$_bak\" \"$_dst\""
+        [ -z "$_left" ] ||
+            say "  leftover: $_left  (incomplete; not a backup — delete it)"
     elif [ "$_same" -eq 1 ]; then
         say "  rollback: rm -rf \"$_dst\"  (the skill there was already this one;"
         say "            nothing was replaced by this run)"
@@ -400,10 +499,10 @@ report_skill() {
 say ""
 say "done."
 say "  binary : $BIN  (rollback: rm -f \"$BIN\")"
-[ -z "$DST1" ] || report_skill "$DST1" "$BAK1" "$SAME1" "$MOVED1"
-[ -z "$DST2" ] || report_skill "$DST2" "$BAK2" "$SAME2" "$MOVED2"
+[ -z "$DST1" ] || report_skill "$DST1" "$BAK1" "$SAME1" "$MOVED1" "$LEFT1"
+[ -z "$DST2" ] || report_skill "$DST2" "$BAK2" "$SAME2" "$MOVED2" "$LEFT2"
 say ""
 say "run \`$RUN --help\` to start, or \`$RUN auth status --no-refresh\` for token expiry."
 [ "$STRANDED" -eq 0 ] ||
-    die "$STRANDED askcodex backup(s) are still inside a skills directory, named above.
-       The binary and the new skill are installed; move those backups out."
+    die "$STRANDED askcodex backup(s) or leftover(s) are still inside a skills directory,
+       named above. The binary and the new skill are installed."

@@ -91,9 +91,12 @@ selects skill synchronization explicitly; `--check-auth` checks stored credentia
 without refreshing. Tests cover selection, invalid arguments, authentication
 isolation, backups kept outside the skills directories (`XDG_DATA_HOME`, name
 collisions, and moving the `askcodex.bak*` siblings older installers left),
-the printed rollback, restoration after a failed or interrupted swap,
-idempotence, locks, and existing directory permissions. The tests remove any
-inherited `XDG_DATA_HOME`, so a run never writes to the real data directory.
+the cross-filesystem copy, verify, publish and remove path (selected by
+refusing the installer's hard-link probe), partial copies that are never
+reused, leftovers that are never offered as a rollback, the printed rollback,
+restoration after a failed or interrupted swap, idempotence, locks, and
+existing directory permissions. The tests remove any inherited
+`XDG_DATA_HOME`, so a run never writes to the real data directory.
 
 ---
 

@@ -27,11 +27,15 @@ fi
 SH
     chmod +x "$TASK_ROOT/bin/cargo"
     export TASK_LOG="$TASK_ROOT/calls"
-    REAL_MV="$(command -v mv)"
     AGENTS="$TASK_HOME/.agents/skills"
     BACKUPS="$TASK_HOME/.local/share/askcodex/skill-backups"
     STAMP=20261002T120000Z
     TASK_XDG=""
+}
+
+# Read-only directories some tests create would make the fixture undeletable.
+teardown() {
+    chmod -R u+w "$BATS_TEST_TMPDIR" 2>/dev/null || :
 }
 
 # XDG_DATA_HOME is removed unless a test sets TASK_XDG: an inherited value
@@ -49,15 +53,29 @@ fake_date() {
     chmod +x "$TASK_ROOT/bin/date"
 }
 
-# mv that fails for the paths a case pattern selects and is real otherwise.
-# $1 is the positional parameter to match ($1 source, $2 destination).
-fake_mv() {
-    cat >"$TASK_ROOT/bin/mv" <<SH
+# A wrapper around the real $1 that runs the shell code $4 when its
+# positional parameter number $2 matches the case pattern $3. The code sees
+# the real command as "$real".
+fake_cmd() {
+    cat >"$TASK_ROOT/bin/$1" <<SH
 #!/bin/sh
-case "\$$1" in $2) $3 ;; esac
-exec "$REAL_MV" "\$@"
+real="$(command -v "$1")"
+case "\$$2" in $3) $4 ;; esac
+exec "\$real" "\$@"
 SH
-    chmod +x "$TASK_ROOT/bin/mv"
+    chmod +x "$TASK_ROOT/bin/$1"
+}
+
+# The installer's same-filesystem probe is a hard link: refusing it makes
+# the backup directory look like another filesystem, so the installer takes
+# its copy, verify, publish, remove path.
+cross_fs() {
+    printf '#!/bin/sh\nexit 1\n' >"$TASK_ROOT/bin/ln"
+    chmod +x "$TASK_ROOT/bin/ln"
+}
+
+inode() {
+    perl -e 'print((lstat($ARGV[0]))[1])' "$1"
 }
 
 # Nothing named askcodex.bak* may remain where hosts load skills. The
@@ -124,8 +142,11 @@ skill_with() {
     mkdir -p "$AGENTS/askcodex/references"
     printf 'old reference\n' >"$AGENTS/askcodex/references/notes.md"
     skill_with "$TASK_HOME/.claude/skills/askcodex" 'old claude'
+    before="$(inode "$AGENTS/askcodex")"
     invoke --skills all
     [ "$status" -eq 0 ]
+    # Same filesystem: the backup is the original tree renamed, not a copy.
+    [ "$(inode "$BACKUPS/agents-$STAMP")" = "$before" ]
     cmp "$TASK_REPO/skill/SKILL.md" "$AGENTS/askcodex/SKILL.md"
     cmp "$TASK_REPO/skill/SKILL.md" "$TASK_HOME/.claude/skills/askcodex/SKILL.md"
     backup="$BACKUPS/agents-$STAMP"
@@ -181,21 +202,113 @@ skill_with() {
     [ "$(count_entries "$AGENTS")" -eq 1 ]
 }
 
-@test "a name already taken in the backup dir is never overwritten" {
+@test "a name already taken in the backup dir, or a partial copy, is never overwritten or reused" {
     fake_date
-    skill_with "$BACKUPS/agents-askcodex.bak" kept
-    skill_with "$BACKUPS/agents-$STAMP" 'kept too'
-    skill_with "$AGENTS/askcodex.bak" legacy
+    for mode in same cross; do
+        rm -rf "$TASK_HOME/.agents" "$TASK_HOME/.local/share"
+        [ "$mode" = same ] || cross_fs
+        skill_with "$BACKUPS/agents-askcodex.bak" kept
+        skill_with "$BACKUPS/agents-$STAMP" 'kept too'
+        # A partial copy an interrupted cross-filesystem copy left behind.
+        mkdir -p "$BACKUPS/.incoming-agents-$STAMP/references"
+        skill_with "$AGENTS/askcodex.bak" legacy
+        skill_with "$AGENTS/askcodex" old
+        invoke --skills agents
+        [ "$status" -eq 0 ]
+        [ "$(cat "$BACKUPS/agents-askcodex.bak/SKILL.md")" = kept ]
+        [ "$(cat "$BACKUPS/agents-$STAMP/SKILL.md")" = 'kept too' ]
+        [ "$(cat "$BACKUPS/agents-askcodex.bak.1/SKILL.md")" = legacy ]
+        [ "$(cat "$BACKUPS/agents-$STAMP.1/SKILL.md")" = old ]
+        [ "$(count_entries "$BACKUPS")" -eq 5 ]
+        [ "$(count_entries "$BACKUPS/agents-$STAMP")" -eq 1 ]
+        [ "$(count_entries "$BACKUPS/agents-askcodex.bak")" -eq 1 ]
+        [ "$(count_entries "$BACKUPS/.incoming-agents-$STAMP")" -eq 1 ]
+        no_backups_beside "$AGENTS"
+    done
+}
+
+@test "across filesystems a read-only subdirectory still yields a complete backup and a clean skills dir" {
+    fake_date
+    cross_fs
     skill_with "$AGENTS/askcodex" old
+    mkdir -p "$AGENTS/askcodex/references"
+    printf 'old reference\n' >"$AGENTS/askcodex/references/notes.md"
+    chmod 555 "$AGENTS/askcodex/references"
+    before="$(inode "$AGENTS/askcodex")"
     invoke --skills agents
     [ "$status" -eq 0 ]
-    [ "$(cat "$BACKUPS/agents-askcodex.bak/SKILL.md")" = kept ]
-    [ "$(cat "$BACKUPS/agents-$STAMP/SKILL.md")" = 'kept too' ]
-    [ "$(cat "$BACKUPS/agents-askcodex.bak.1/SKILL.md")" = legacy ]
-    [ "$(cat "$BACKUPS/agents-$STAMP.1/SKILL.md")" = old ]
-    [ "$(count_entries "$BACKUPS")" -eq 4 ]
-    [ ! -e "$BACKUPS/agents-askcodex.bak/askcodex.bak" ]
-    [ ! -e "$BACKUPS/agents-$STAMP/askcodex.bak.$STAMP" ]
+    backup="$BACKUPS/agents-$STAMP"
+    [ "$(inode "$backup")" != "$before" ]
+    [ "$(cat "$backup/SKILL.md")" = old ]
+    [ "$(cat "$backup/references/notes.md")" = 'old reference' ]
+    run perl -e 'exit(((stat($ARGV[0]))[2] & 0777) == 0555 ? 0 : 1)' "$backup/references"
+    [ "$status" -eq 0 ]
+    [ "$(count_entries "$AGENTS")" -eq 1 ]
+    [ "$(count_entries "$BACKUPS")" -eq 1 ]
+}
+
+@test "when the source cannot be removed after a verified copy, rollback uses the complete backup" {
+    fake_date
+    cross_fs
+    skill_with "$AGENTS/askcodex" old
+    mkdir -p "$AGENTS/askcodex/references"
+    printf 'old reference\n' >"$AGENTS/askcodex/references/notes.md"
+    # rm deletes what it can (SKILL.md) and then fails, as it does on a
+    # subdirectory it may not write even after chmod (another owner's).
+    # shellcheck disable=SC2016  # code for the fake rm, expanded there
+    fake_cmd rm 2 '*/askcodex.leftover.*' '"$real" -f "$2/SKILL.md"; exit 1'
+    invoke --skills agents
+    [ "$status" -eq 1 ]
+    backup="$BACKUPS/agents-$STAMP"
+    left="$AGENTS/askcodex.leftover.$STAMP"
+    [ "$(cat "$backup/SKILL.md")" = old ]
+    [ "$(cat "$backup/references/notes.md")" = 'old reference' ]
+    [ ! -e "$left/SKILL.md" ]
+    [ -d "$left/references" ]
+    no_backups_beside "$AGENTS"
+    [[ "$output" == *"error: the backup at $backup is complete"* ]]
+    [[ "$output" == *"leftover: $left  (incomplete; not a backup"* ]]
+    [[ "$output" == *'1 askcodex backup(s) or leftover(s) are still inside a skills directory'* ]]
+    rollback="$(printf '%s\n' "$output" | sed -n 's/^  rollback: //p')"
+    [ "$rollback" = "rm -rf \"$AGENTS/askcodex\" && mv \"$backup\" \"$AGENTS/askcodex\"" ]
+    # A later run neither mistakes the leftover for a backup nor deletes it.
+    rm "$TASK_ROOT/bin/rm"
+    invoke --skills agents
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"note: $left is the incomplete remainder"* ]]
+    [ -d "$left/references" ]
+    [ "$(count_entries "$BACKUPS")" -eq 1 ]
+    sh -c "$rollback"
+    [ "$(cat "$AGENTS/askcodex/SKILL.md")" = old ]
+    [ "$(cat "$AGENTS/askcodex/references/notes.md")" = 'old reference' ]
+}
+
+@test "a copy that fails partway publishes nothing, is discarded, and prints no hand-typed retry" {
+    fake_date
+    cross_fs
+    skill_with "$AGENTS/askcodex" old
+    mkdir -p "$AGENTS/askcodex/references"
+    printf 'old reference\n' >"$AGENTS/askcodex/references/notes.md"
+    # Out of space: a partial tree at the destination, then failure.
+    # shellcheck disable=SC2016  # code for the fake cp, expanded there
+    fake_cmd cp 3 '*/.incoming-*' 'mkdir -p "$3/references"; exit 1'
+    invoke --skills agents
+    [ "$status" -eq 1 ]
+    held="$AGENTS/askcodex.bak.$STAMP"
+    cmp "$TASK_REPO/skill/SKILL.md" "$AGENTS/askcodex/SKILL.md"
+    [ "$(cat "$held/SKILL.md")" = old ]
+    [ "$(cat "$held/references/notes.md")" = 'old reference' ]
+    [ "$(count_entries "$BACKUPS")" -eq 0 ]
+    [[ "$output" == *"error: could not back up $held"* ]]
+    [[ "$output" == *'Re-run ./install.sh with the same --skills to retry'* ]]
+    [[ "$output" != *"mv \"$held\" \"$BACKUPS"* ]]
+    [[ "$output" == *"rollback: rm -rf \"$AGENTS/askcodex\" && mv \"$held\" \"$AGENTS/askcodex\""* ]]
+    rm "$TASK_ROOT/bin/cp"
+    invoke --skills agents
+    [ "$status" -eq 0 ]
+    [ "$(cat "$BACKUPS/agents-askcodex.bak.$STAMP/SKILL.md")" = old ]
+    [ "$(cat "$BACKUPS/agents-askcodex.bak.$STAMP/references/notes.md")" = 'old reference' ]
+    [ "$(count_entries "$BACKUPS")" -eq 1 ]
     no_backups_beside "$AGENTS"
 }
 
@@ -238,7 +351,7 @@ skill_with() {
     # interrupts between the two renames, so it must not expand here.
     # shellcheck disable=SC2016
     for action in 'exit 1' 'kill -TERM "$PPID"; exit 1'; do
-        fake_mv 1 '*/askcodex.new' "$action"
+        fake_cmd mv 1 '*/askcodex.new' "$action"
         invoke --skills agents
         [ "$status" -ne 0 ]
         [ "$(cat "$AGENTS/askcodex/SKILL.md")" = old ]
@@ -253,23 +366,29 @@ skill_with() {
 
 @test "a backup that cannot leave the skills dir is reported loudly, fails the run, and moves on re-run" {
     fake_date
-    skill_with "$AGENTS/askcodex" old
-    fake_mv 2 '*/skill-backups/*' 'exit 1'
-    invoke --skills agents
-    [ "$status" -eq 1 ]
-    held="$AGENTS/askcodex.bak.$STAMP"
-    cmp "$TASK_REPO/skill/SKILL.md" "$AGENTS/askcodex/SKILL.md"
-    [ "$(cat "$held/SKILL.md")" = old ]
-    [ ! -e "$AGENTS/askcodex.lock" ]
-    [[ "$output" == *"error: could not move $held"* ]]
-    [[ "$output" == *"to $BACKUPS/agents-$STAMP."* ]]
-    [[ "$output" == *"rollback: rm -rf \"$AGENTS/askcodex\" && mv \"$held\" \"$AGENTS/askcodex\""* ]]
-    [[ "$output" == *'1 askcodex backup(s) are still inside a skills directory'* ]]
-    rm "$TASK_ROOT/bin/mv"
-    invoke --skills agents
-    [ "$status" -eq 0 ]
-    [ "$(cat "$BACKUPS/agents-askcodex.bak.$STAMP/SKILL.md")" = old ]
-    no_backups_beside "$AGENTS"
+    for mode in same cross; do
+        rm -rf "$TASK_HOME/.agents" "$TASK_HOME/.local/share"
+        [ "$mode" = same ] || cross_fs
+        skill_with "$AGENTS/askcodex" old
+        fake_cmd mv 2 '*/skill-backups/*' 'exit 1'
+        invoke --skills agents
+        [ "$status" -eq 1 ]
+        held="$AGENTS/askcodex.bak.$STAMP"
+        cmp "$TASK_REPO/skill/SKILL.md" "$AGENTS/askcodex/SKILL.md"
+        [ "$(cat "$held/SKILL.md")" = old ]
+        [ ! -e "$AGENTS/askcodex.lock" ]
+        [ "$(count_entries "$BACKUPS")" -eq 0 ]
+        [[ "$output" == *"error: could not back up $held"* ]]
+        [[ "$output" == *"into $BACKUPS. It is intact"* ]]
+        [[ "$output" != *"mv \"$held\" \"$BACKUPS"* ]]
+        [[ "$output" == *"rollback: rm -rf \"$AGENTS/askcodex\" && mv \"$held\" \"$AGENTS/askcodex\""* ]]
+        [[ "$output" == *'1 askcodex backup(s) or leftover(s) are still inside a skills directory'* ]]
+        rm "$TASK_ROOT/bin/mv"
+        invoke --skills agents
+        [ "$status" -eq 0 ]
+        [ "$(cat "$BACKUPS/agents-askcodex.bak.$STAMP/SKILL.md")" = old ]
+        no_backups_beside "$AGENTS"
+    done
 }
 
 @test "auth check is explicit no-refresh and suppresses private diagnostics" {
