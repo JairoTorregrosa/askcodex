@@ -37,9 +37,15 @@ codex login                    # use file-based credential storage
 ./install.sh --check-auth      # read-only diagnostic; never refreshes
 ```
 
-Options can be combined. Skill synchronization preserves earlier backups and
-leaves an identical installed skill untouched. `--check-auth` suppresses account
-details in installer output. A prebuilt binary can also be downloaded from
+Options can be combined. Skill synchronization leaves an identical installed
+skill untouched. A different one is replaced and backed up to
+`${XDG_DATA_HOME:-~/.local/share}/askcodex/skill-backups/` as
+`agents-<UTC time>` or `claude-<UTC time>`, outside every skills directory:
+agents load each directory there as a skill, so a backup beside the skill would
+load as a stale second copy. Backups that older installers left beside the
+skill (`askcodex.bak*`) are moved there too. No backup is overwritten or
+deleted, and the installer prints the rollback command. `--check-auth`
+suppresses account details in installer output. A prebuilt binary can also be downloaded from
 [releases](https://github.com/JairoTorregrosa/askcodex/releases); verify its
 `SHA256SUMS` before installing.
 
