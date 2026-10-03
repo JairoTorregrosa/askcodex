@@ -2065,6 +2065,13 @@ const TINY_RGBA_PNG: [u8; 70] = [
     0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
 ];
 
+/// Re-seal the IHDR CRC after a test edits header bytes, so the edit is
+/// read as a different valid header rather than as corruption.
+fn reseal_ihdr(png: &mut [u8]) {
+    let crc = crc32(&png[12..29]).to_be_bytes();
+    png[29..33].copy_from_slice(&crc);
+}
+
 #[test]
 fn png_facts_read_the_file_not_the_backends_claims() {
     assert_eq!(
@@ -2078,10 +2085,12 @@ fn png_facts_read_the_file_not_the_backends_claims() {
     // Same header, colour type 2 (RGB): no alpha channel.
     let mut rgb = TINY_RGBA_PNG;
     rgb[25] = 2;
+    reseal_ihdr(&mut rgb);
     assert_eq!(png_facts(&rgb).map(|f| f.alpha_channel), Some(false));
     // Palette images carry transparency only through a tRNS chunk.
     let mut palette = TINY_RGBA_PNG[..33].to_vec();
     palette[25] = 3;
+    reseal_ihdr(&mut palette);
     let chunk = |kind: &[u8], data: &[u8]| {
         let mut c = (data.len() as u32).to_be_bytes().to_vec();
         c.extend_from_slice(kind);
@@ -2102,6 +2111,7 @@ fn png_facts_read_the_file_not_the_backends_claims() {
     for color_type in [0u8, 2] {
         let mut keyed = palette.clone();
         keyed[25] = color_type;
+        reseal_ihdr(&mut keyed);
         keyed.extend(chunk(b"tRNS", &[0, 0, 0, 0, 0, 0]));
         keyed.extend(chunk(b"IDAT", &[]));
         assert_eq!(
@@ -2119,7 +2129,15 @@ fn png_facts_read_the_file_not_the_backends_claims() {
     // A zero dimension is not an image either.
     let mut empty = TINY_RGBA_PNG;
     empty[16..20].copy_from_slice(&[0, 0, 0, 0]);
+    reseal_ihdr(&mut empty);
     assert_eq!(png_facts(&empty), None);
+    // A flipped width bit with the old CRC is corruption, not a size.
+    let mut flipped = TINY_RGBA_PNG;
+    flipped[19] ^= 0x02;
+    assert_eq!(png_facts(&flipped), None);
+    let mut resealed = flipped;
+    reseal_ihdr(&mut resealed);
+    assert_eq!(png_facts(&resealed).map(|f| f.width), Some(3));
 }
 
 #[test]

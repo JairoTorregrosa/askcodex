@@ -135,8 +135,13 @@ pub(super) fn png_facts(png: &[u8]) -> Option<PngFacts> {
     if png.get(..SIGNATURE.len())? != SIGNATURE {
         return None;
     }
-    let ihdr = png.get(SIGNATURE.len()..SIGNATURE.len() + 8 + 13)?;
+    // length (4) + type (4) + data (13) + CRC (4); a CRC that does not
+    // match means the header bytes are not the ones the encoder wrote.
+    let ihdr = png.get(SIGNATURE.len()..SIGNATURE.len() + 8 + 13 + 4)?;
     if ihdr[0..4] != [0, 0, 0, 13] || &ihdr[4..8] != b"IHDR" {
+        return None;
+    }
+    if crc32(&ihdr[4..21]).to_be_bytes() != ihdr[21..25] {
         return None;
     }
     let width = u32::from_be_bytes(ihdr[8..12].try_into().ok()?);
@@ -157,6 +162,19 @@ pub(super) fn png_facts(png: &[u8]) -> Option<PngFacts> {
         height,
         alpha_channel,
     })
+}
+
+/// The PNG chunk CRC (CRC-32/ISO-HDLC, as in zlib), bitwise: it runs over
+/// 17 bytes once per saved image, so a table buys nothing.
+pub(super) fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0xffff_ffff_u32;
+    for &byte in bytes {
+        crc ^= u32::from(byte);
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ (0xedb8_8320 & (crc & 1).wrapping_neg());
+        }
+    }
+    !crc
 }
 
 /// Walk the chunks after IHDR until the image data starts.

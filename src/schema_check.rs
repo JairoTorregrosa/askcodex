@@ -400,12 +400,20 @@ impl Checker<'_> {
         }
         let properties = schema.get("properties").and_then(Value::as_object);
         for (key, member) in object {
-            let path = child(at, key);
+            // Keys the schema declares may appear in a path; a key only the
+            // answer has may be personal data (an email as a property
+            // name), so it never reaches a message.
+            let declared = properties.is_some_and(|p| p.contains_key(key));
+            let path = if declared {
+                child(at, key)
+            } else {
+                format!("{at}/*")
+            };
             match properties.and_then(|p| p.get(key)) {
                 Some(property) => self.check(property, member, &path, depth)?,
                 None => match schema.get("additionalProperties") {
                     Some(Value::Bool(false)) => {
-                        return fail(at, format!("property {key:?} is not allowed"));
+                        return fail(at, "a property the schema does not declare is not allowed");
                     }
                     Some(extra @ Value::Object(_)) => self.check(extra, member, &path, depth)?,
                     _ => {}
@@ -495,7 +503,7 @@ mod tests {
             (
                 json!({"id": "T-1", "product": "app", "severity": 1, "tags": [], "x": 1}),
                 "",
-                "\"x\" is not allowed",
+                "does not declare is not allowed",
             ),
             (
                 json!({"id": 7, "product": "app", "severity": 1, "tags": []}),
@@ -577,6 +585,17 @@ mod tests {
         let recursive =
             json!({"$defs": {"t": {"not": {"$ref": "#/$defs/t"}}}, "$ref": "#/$defs/t"});
         let _ = check(&recursive, &json!(1));
+    }
+
+    #[test]
+    fn keys_only_the_answer_has_never_reach_a_message() {
+        let closed = json!({"type": "object", "additionalProperties": false, "properties": {}});
+        let violation = check(&closed, &json!({"ana@example.com": 1})).unwrap_err();
+        assert!(!violation.to_string().contains("ana@"), "{violation}");
+        let typed = json!({"type": "object", "additionalProperties": {"type": "string"}});
+        let violation = check(&typed, &json!({"ana@example.com": 1})).unwrap_err();
+        assert_eq!(violation.at, "/*");
+        assert!(!violation.to_string().contains("ana@"), "{violation}");
     }
 
     #[test]
