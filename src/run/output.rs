@@ -226,14 +226,22 @@ where
     }
 }
 
+/// The answer is never quoted in the error: it can hold the private data
+/// the schema was extracting, and stderr ends up in logs.
 fn parse_structured_answer(text: &str) -> Result<Value, Error> {
-    serde_json::from_str(text).map_err(|source| {
-        let start: String = text.chars().take(160).collect();
-        Error::UnexpectedResponse {
-            context: format!(
-                "--schema answer is not valid JSON ({source}); it starts with {start:?}"
+    use crate::input::{ExactJsonError, parse_exact_json};
+    let chars = text.chars().count();
+    parse_exact_json(text).map_err(|error| Error::UnexpectedResponse {
+        context: match error {
+            ExactJsonError::Syntax(source) => format!(
+                "--schema answer is not valid JSON ({source}; {chars} characters, not quoted)"
             ),
-        }
+            ExactJsonError::LossyInteger => format!(
+                "--schema answer holds an integer beyond the 64-bit range, which result.json \
+                 cannot carry exactly ({chars} characters, not quoted); type such fields as \
+                 strings in the schema"
+            ),
+        },
     })
 }
 

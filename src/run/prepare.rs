@@ -147,11 +147,20 @@ pub(super) fn resolve(cmd: Cmd, stdin: &mut dyn Read) -> Result<Resolved, Error>
 /// HTTP 400 `invalid_json_schema` naming the problem); a file that is not
 /// even a JSON object is refused here, before credentials are loaded.
 pub(super) fn read_schema(path: &Path) -> Result<Value, Error> {
+    use crate::input::{ExactJsonError, parse_exact_json};
     let bytes = crate::input::read_file(path, crate::input::MAX_TEXT_BYTES, "schema file")?;
-    match serde_json::from_slice::<Value>(&bytes)? {
-        schema @ Value::Object(_) => Ok(schema),
-        _ => Err(Error::InvalidInput {
+    let text = String::from_utf8(bytes).map_err(|_| Error::InvalidInput {
+        reason: "--schema must be UTF-8 JSON",
+    })?;
+    match parse_exact_json(&text) {
+        Ok(schema @ Value::Object(_)) => Ok(schema),
+        Ok(_) => Err(Error::InvalidInput {
             reason: "--schema must hold a JSON object (a JSON Schema)",
+        }),
+        Err(ExactJsonError::Syntax(source)) => Err(Error::Json(source)),
+        // Sent as is, the constraint would reach the backend rounded.
+        Err(ExactJsonError::LossyInteger) => Err(Error::InvalidInput {
+            reason: "--schema holds an integer beyond the 64-bit range, which would be sent rounded",
         }),
     }
 }

@@ -47,6 +47,56 @@ pub(crate) fn read_file(path: &Path, limit: u64, kind: &'static str) -> Result<V
     })
 }
 
+/// Why [`parse_exact_json`] refused a document.
+#[derive(Debug)]
+pub(crate) enum ExactJsonError {
+    /// Not JSON. The serde message names a line and column, never content.
+    Syntax(serde_json::Error),
+    /// An integer literal outside the i64/u64 range. serde_json would turn
+    /// it into the nearest f64, so a re-serialized document would carry a
+    /// different number than the one written.
+    LossyInteger,
+}
+
+/// Parse JSON, refusing any integer literal a `Value` cannot hold exactly.
+///
+/// Fractions and exponents are left alone: a reader of JSON numbers expects
+/// floating point there. A long integer (an id, an amount in minor units)
+/// is different: rounding it silently is a confident wrong answer.
+pub(crate) fn parse_exact_json(text: &str) -> Result<serde_json::Value, ExactJsonError> {
+    let value = serde_json::from_str(text).map_err(ExactJsonError::Syntax)?;
+    // The document is valid JSON here, so a minimal scan is enough: skip
+    // strings (with their escapes) and look at each bare number token.
+    let bytes = text.as_bytes();
+    let mut at = 0;
+    while at < bytes.len() {
+        match bytes[at] {
+            b'"' => {
+                at += 1;
+                while at < bytes.len() && bytes[at] != b'"' {
+                    at += if bytes[at] == b'\\' { 2 } else { 1 };
+                }
+                at += 1;
+            }
+            b'-' | b'0'..=b'9' => {
+                let start = at;
+                while at < bytes.len()
+                    && matches!(bytes[at], b'-' | b'+' | b'.' | b'e' | b'E' | b'0'..=b'9')
+                {
+                    at += 1;
+                }
+                let token = &text[start..at];
+                let integer = !token.contains(['.', 'e', 'E']);
+                if integer && token.parse::<i64>().is_err() && token.parse::<u64>().is_err() {
+                    return Err(ExactJsonError::LossyInteger);
+                }
+            }
+            _ => at += 1,
+        }
+    }
+    Ok(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -64,6 +114,31 @@ mod tests {
             read_limited(&mut Cursor::new(b"12345678"), 8).unwrap(),
             b"12345678"
         );
+    }
+
+    #[test]
+    fn exact_json_keeps_64_bit_integers_and_refuses_wider_ones() {
+        let ok = parse_exact_json(
+            r#"{"id": 18446744073709551615, "n": -9223372036854775808, "x": 1.5e300}"#,
+        )
+        .unwrap();
+        assert_eq!(ok["id"].as_u64(), Some(u64::MAX));
+        assert!(matches!(
+            parse_exact_json(r#"{"id": 18446744073709551616}"#),
+            Err(ExactJsonError::LossyInteger)
+        ));
+        assert!(matches!(
+            parse_exact_json("[-9223372036854775809]"),
+            Err(ExactJsonError::LossyInteger)
+        ));
+        // Digits inside strings, escaped quotes included, are not numbers.
+        assert!(
+            parse_exact_json(r#"{"s": "99999999999999999999 \" 99999999999999999999"}"#).is_ok()
+        );
+        assert!(matches!(
+            parse_exact_json("{\"a\": "),
+            Err(ExactJsonError::Syntax(_))
+        ));
     }
 
     #[test]

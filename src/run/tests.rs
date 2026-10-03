@@ -2157,6 +2157,56 @@ fn a_schema_answer_that_is_not_json_is_a_failure_not_a_result() {
 }
 
 #[test]
+fn a_failed_schema_answer_never_quotes_the_answer_and_never_rounds() {
+    const SENTINEL: &str = "PRIVATE-SENTINEL-4417";
+    for text in [
+        format!("{{\"name\": \"{SENTINEL}\", "),
+        format!("{{\"name\": \"{SENTINEL}\", \"id\": 18446744073709551617}}"),
+    ] {
+        let mut out = Recorder::default();
+        let mut err = Recorder::default();
+        let settings = AskSettings {
+            structured: true,
+            ..AskSettings::new("m", None)
+        };
+        let failure =
+            emit_ask(true, settings, &mut out, &mut err, |_| Ok(answer(&text))).unwrap_err();
+        assert_eq!(failure.code(), "response_invalid");
+        let mut diagnostic = Vec::new();
+        failure.write_diagnostic(&mut diagnostic, true).unwrap();
+        let diagnostic = String::from_utf8(diagnostic).unwrap();
+        assert!(
+            !diagnostic.contains(SENTINEL),
+            "answer leaked: {diagnostic}"
+        );
+        assert!(!failure.to_string().contains(SENTINEL));
+        assert!(out.bytes.is_empty());
+    }
+}
+
+#[test]
+fn a_schema_with_a_lossy_integer_is_refused_before_sending() {
+    let dir = ScratchDir::new("schema-lossy");
+    let path = dir.join("s.json");
+    std::fs::write(
+        &path,
+        r#"{"type": "integer", "maximum": 18446744073709551617}"#,
+    )
+    .unwrap();
+    let err = read_schema(&path).unwrap_err();
+    assert_eq!(err.code(), "input_invalid");
+    std::fs::write(
+        &path,
+        r#"{"type": "integer", "maximum": 18446744073709551615}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        read_schema(&path).unwrap()["maximum"].as_u64(),
+        Some(u64::MAX)
+    );
+}
+
+#[test]
 fn the_backend_document_rides_along_only_with_the_flag() {
     let raw = json!({"models": [{"slug": "m", "base_instructions": "long"}]});
     let result = json!({"models": [{"slug": "m"}]});
