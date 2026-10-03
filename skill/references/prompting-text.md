@@ -34,9 +34,10 @@ output against the task.
   513 (observed 2026-10-02). It shapes length and detail; a hard cap still belongs in the brief.
 - `--schema` is strict: every property must be in `required`, every object needs
   `"additionalProperties": false`, and an optional value adds `"null"` to its own type
-  (`["string","null"]`, `["integer","null"]`, with `null` in any `enum`). A schema that breaks a rule fails before generation with
-  `error.backend.code: "invalid_json_schema"` naming the key; it costs no answer. The backend
-  enforced the schema even when the prompt asked for a haiku and "no JSON" (observed 2026-10-02).
+  (`["string","null"]`, `["integer","null"]`, with `null` in any `enum`). A schema that breaks a
+  rule fails before generation with `error.backend.code: "invalid_json_schema"` naming the key; it
+  costs no answer. The backend enforced the schema even when the prompt asked for a haiku and "no
+  JSON" (observed 2026-10-02).
 
 ## Do this
 
