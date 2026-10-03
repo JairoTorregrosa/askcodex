@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::cli::{AuthCmd, Cli, Cmd, Effort, HttpMethod, ImageCmd};
+use crate::cli::{AuthCmd, Background, Cli, Cmd, Effort, HttpMethod, ImageCmd, Verbosity};
 use crate::config;
 use crate::endpoints;
 use crate::error::Error;
@@ -86,7 +86,11 @@ fn run_with_io(
             let mut client = Client::from_session(load_session()?, cli.no_refresh)?;
             // A no-op when `--no-refresh` is set (the flag's contract).
             client.ensure_fresh()?;
-            run_backend(cmd, &mut client, mode, out, err)
+            let output = Output {
+                mode,
+                backend: cli.backend,
+            };
+            run_backend(cmd, &mut client, output, out, err)
         }
     }
 }
@@ -132,11 +136,12 @@ fn oauth_agent() -> ureq::Agent {
 fn run_backend(
     cmd: Backend,
     client: &mut Client,
-    mode: impl Into<Mode>,
+    output: impl Into<Output>,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<(), Error> {
-    let mode = mode.into();
+    let output = output.into();
+    let mode = output.mode;
     match cmd {
         Backend::Whoami => {
             let who = endpoints::account::whoami(client)?;
@@ -149,7 +154,7 @@ fn run_backend(
         Backend::Transcribe { upload } => {
             let (text, raw) = upload.transcribe(client)?;
             if mode != Mode::Text {
-                emit_result(out, mode, "transcribe", &json!({"text": text}), Some(&raw))
+                emit_inspectable(out, output, "transcribe", &json!({"text": text}), &raw)
             } else {
                 writeln!(out, "{text}").map_err(Error::from)
             }
@@ -157,7 +162,7 @@ fn run_backend(
         Backend::Usage => {
             let (usage, raw) = endpoints::account::usage(client)?;
             if mode != Mode::Text {
-                emit_result(out, mode, "usage", &usage, Some(&raw))
+                emit_inspectable(out, output, "usage", &usage, &raw)
             } else {
                 emit_human(out, &render_usage(&usage))
             }
@@ -165,13 +170,17 @@ fn run_backend(
         Backend::Models { client_version } => {
             let (models, raw) = endpoints::account::models(client, &client_version)?;
             if mode != Mode::Text {
-                emit_result(out, mode, "models", &json!({"models": models}), Some(&raw))
+                emit_inspectable(out, output, "models", &json!({"models": models}), &raw)
             } else {
                 emit_human(out, &render_models(&models))
             }
         }
-        Backend::ImageCreate { prompt, out: path } => run_image(&path, None, mode, out, || {
-            endpoints::images::create(client, &prompt)
+        Backend::ImageCreate {
+            prompt,
+            out: path,
+            background,
+        } => run_image(&path, None, mode, out, || {
+            endpoints::images::create(client, &prompt, background)
         }),
         Backend::ImageEdit {
             prepared,
@@ -184,11 +193,20 @@ fn run_backend(
             model,
             instructions,
             effort,
+            verbosity,
+            schema,
         } => {
             let effort = effort.map(|e| e.as_str().to_string());
+            let verbosity = verbosity.map(|v| v.as_str().to_string());
             let request =
-                ResponsesRequest::user_text(model.clone(), prompt, instructions, effort.clone());
-            emit_ask(mode, &model, effort.as_deref(), out, err, |on_delta| {
+                ResponsesRequest::user_text(model.clone(), prompt, instructions, effort.clone())
+                    .with_text(verbosity.clone(), schema.clone());
+            let settings = AskSettings {
+                verbosity: verbosity.as_deref(),
+                schema: schema.as_ref(),
+                ..AskSettings::new(&model, effort.as_deref())
+            };
+            emit_ask(mode, settings, out, err, |on_delta| {
                 endpoints::responses::ask(client, &request, on_delta)
             })
         }

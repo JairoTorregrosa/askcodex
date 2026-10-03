@@ -316,13 +316,13 @@ fn models_human_render_matches_the_live_sample() {
     assert_eq!(lines[0], "8 model(s) available:");
     assert_eq!(
         lines[1],
-        "  - gpt-5.6-sol        in:text,image   effort:low,medium,high,xhigh,max,ultra"
+        "  - gpt-5.6-sol              in:text,image   effort:low,medium,high,xhigh,max,ultra (codex default low)"
     );
     // Efforts are per-model, read off the level OBJECTS: this one
     // really does carry four levels where gpt-5.6-sol carries six.
     assert_eq!(
         lines[5],
-        "  - gpt-5.5            in:text,image   effort:low,medium,high,xhigh"
+        "  - gpt-5.5                  in:text,image   effort:low,medium,high,xhigh (codex default medium)"
     );
     // Hidden models carry the visibility flag; listed ones do not.
     assert!(lines[2].ends_with("  [hide]"), "{:?}", lines[2]);
@@ -337,11 +337,12 @@ fn models_render_flags_unknown_visibility_instead_of_assuming_listed() {
         input_modalities: vec![],
         supported_reasoning_levels: vec![],
         visibility: None,
+        ..Default::default()
     }];
     let text = render_models(&models);
     assert_eq!(
         text,
-        "1 model(s) available:\n  - mystery            in:-            effort:-  [-]\n"
+        "1 model(s) available:\n  - mystery                  in:-            effort:- (codex default -)  [-]\n"
     );
 }
 
@@ -357,6 +358,7 @@ fn models_render_shows_absent_input_modalities_instead_of_an_empty_column() {
             effort: Some("low".to_string()),
         }],
         visibility: Some("list".to_string()),
+        ..Default::default()
     };
     let text = render_models(&[quiet]);
     let line = text.lines().nth(1).expect("one model line");
@@ -386,6 +388,7 @@ fn models_render_shows_a_model_without_reasoning_levels_as_absent() {
         input_modalities: vec!["text".to_string()],
         supported_reasoning_levels: vec![],
         visibility: Some("list".to_string()),
+        ..Default::default()
     };
     // A level object whose `effort` key is absent is absent per entry,
     // and does not erase the efforts that ARE there.
@@ -399,11 +402,12 @@ fn models_render_shows_a_model_without_reasoning_levels_as_absent() {
             },
         ],
         visibility: Some("list".to_string()),
+        ..Default::default()
     };
     let text = render_models(&[no_levels, partial]);
     let lines: Vec<&str> = text.lines().collect();
-    assert!(lines[1].ends_with("effort:-"), "{:?}", lines[1]);
-    assert!(lines[2].ends_with("effort:-,high"), "{:?}", lines[2]);
+    assert!(lines[1].contains("effort:- "), "{:?}", lines[1]);
+    assert!(lines[2].contains("effort:-,high "), "{:?}", lines[2]);
 }
 
 /// The wire shape is `supported_reasoning_levels: [{"effort": ...}]`.
@@ -551,13 +555,16 @@ fn a_png_payload_is_written_verbatim_and_reported() {
     let image = ImageResult {
         png: png.clone(),
         size: Some("1254x1254".to_string()),
+        background: None,
     };
     let mut out = Recorder::default();
     save_image(&image, &path, Some(1), false, &mut out).unwrap();
 
     assert_eq!(std::fs::read(&path).unwrap(), png);
+    // The fixture has no IHDR, so the file's own facts are unknown rather
+    // than copied from the backend's claims.
     let expected = format!(
-        "saved {}  (1254x1254 PNG, {} bytes, 1 ref image(s))\n",
+        "saved {}  (1254x1254 PNG, {} bytes, 1 ref image(s))\n  pixels ?, alpha channel ?, backend background -\n",
         path.display(),
         png.len()
     );
@@ -580,6 +587,7 @@ fn an_unusable_output_path_fails_before_the_billed_call() {
         Ok(ImageResult {
             png: png_fixture(),
             size: Some("1254x1254".to_string()),
+            background: None,
         })
     })
     .unwrap_err();
@@ -601,6 +609,7 @@ fn an_unusable_output_path_fails_before_the_billed_call() {
         Ok(ImageResult {
             png: png_fixture(),
             size: Some("1254x1254".to_string()),
+            background: None,
         })
     })
     .unwrap();
@@ -711,6 +720,7 @@ fn image_json_mode_puts_only_the_json_document_on_stdout() {
     let image = ImageResult {
         png: png.clone(),
         size: Some("1254x1254".to_string()),
+        background: None,
     };
     let mut out = Recorder::default();
     save_image(&image, &path, None, true, &mut out).unwrap();
@@ -758,8 +768,7 @@ fn ask_text_mode_streams_every_delta_immediately() {
 
     emit_ask(
         false,
-        "gpt-5.4-mini",
-        None,
+        AskSettings::new("gpt-5.4-mini", None),
         &mut out,
         &mut err,
         |on_delta| {
@@ -785,10 +794,16 @@ fn ask_text_mode_streams_every_delta_immediately() {
 fn ask_text_mode_adds_a_newline_only_when_the_answer_lacks_one() {
     let mut out = Recorder::default();
     let mut err = Recorder::default();
-    emit_ask(false, "m", None, &mut out, &mut err, |on_delta| {
-        on_delta("done\n")?;
-        Ok(answer("done\n"))
-    })
+    emit_ask(
+        false,
+        AskSettings::new("m", None),
+        &mut out,
+        &mut err,
+        |on_delta| {
+            on_delta("done\n")?;
+            Ok(answer("done\n"))
+        },
+    )
     .unwrap();
     assert_eq!(out.text(), "done\n");
     assert!(err.bytes.is_empty(), "stderr: {:?}", err.text());
@@ -802,9 +817,13 @@ fn ask_text_mode_adds_a_newline_only_when_the_answer_lacks_one() {
 fn an_empty_answer_is_announced_instead_of_padded_with_a_newline() {
     let mut out = Recorder::default();
     let mut err = Recorder::default();
-    emit_ask(false, "m", None, &mut out, &mut err, |_on_delta| {
-        Ok(answer(""))
-    })
+    emit_ask(
+        false,
+        AskSettings::new("m", None),
+        &mut out,
+        &mut err,
+        |_on_delta| Ok(answer("")),
+    )
     .unwrap();
     assert!(
         out.bytes.is_empty(),
@@ -822,13 +841,17 @@ fn an_empty_answer_is_announced_instead_of_padded_with_a_newline() {
     // not a missing one — and does not mix an advisory into machine output.
     let mut out = Recorder::default();
     let mut err = Recorder::default();
-    emit_ask(true, "m", None, &mut out, &mut err, |_on_delta| {
-        Ok(answer(""))
-    })
+    emit_ask(
+        true,
+        AskSettings::new("m", None),
+        &mut out,
+        &mut err,
+        |_on_delta| Ok(answer("")),
+    )
     .unwrap();
     assert_eq!(
         out.semantic_result("ask"),
-        json!({"model": "m", "effort": null, "text": "", "usage": null})
+        json!({"model": "m", "effort": null, "verbosity": null, "text": "", "usage": null})
     );
     assert!(
         err.bytes.is_empty(),
@@ -839,10 +862,16 @@ fn an_empty_answer_is_announced_instead_of_padded_with_a_newline() {
     // stderr: only the EMPTY case changed.
     let mut out = Recorder::default();
     let mut err = Recorder::default();
-    emit_ask(false, "m", None, &mut out, &mut err, |on_delta| {
-        on_delta("x")?;
-        Ok(answer("x"))
-    })
+    emit_ask(
+        false,
+        AskSettings::new("m", None),
+        &mut out,
+        &mut err,
+        |on_delta| {
+            on_delta("x")?;
+            Ok(answer("x"))
+        },
+    )
     .unwrap();
     assert_eq!(out.text(), "x\n");
     assert!(err.bytes.is_empty(), "stderr: {:?}", err.text());
@@ -857,8 +886,7 @@ fn ask_json_mode_emits_one_document_and_never_interleaves_deltas() {
 
     emit_ask(
         true,
-        "gpt-5.4-mini",
-        Some("medium"),
+        AskSettings::new("gpt-5.4-mini", Some("medium")),
         &mut out,
         &mut err,
         |on_delta| {
@@ -878,7 +906,7 @@ fn ask_json_mode_emits_one_document_and_never_interleaves_deltas() {
     let document = out.semantic_result("ask");
     assert_eq!(
         document,
-        json!({"model": "gpt-5.4-mini", "effort": "medium", "text": "ASKCODEX-VERIFY-OK", "usage": null})
+        json!({"model": "gpt-5.4-mini", "effort": "medium", "verbosity": null, "text": "ASKCODEX-VERIFY-OK", "usage": null})
     );
 }
 
@@ -886,12 +914,19 @@ fn ask_json_mode_emits_one_document_and_never_interleaves_deltas() {
 fn ask_propagates_a_stream_failure_instead_of_reporting_a_partial_answer() {
     let mut out = Recorder::default();
     let mut err = Recorder::default();
-    let failure = emit_ask(false, "m", None, &mut out, &mut err, |on_delta| {
-        on_delta("partial")?;
-        Err(Error::SseStream {
-            detail: "stream ended without response.completed".to_string(),
-        })
-    })
+    let failure = emit_ask(
+        false,
+        AskSettings::new("m", None),
+        &mut out,
+        &mut err,
+        |on_delta| {
+            on_delta("partial")?;
+            Err(Error::SseStream {
+                detail: "stream ended without response.completed".to_string(),
+                backend: None,
+            })
+        },
+    )
     .unwrap_err();
 
     assert!(matches!(failure, Error::SseStream { .. }));
@@ -917,10 +952,16 @@ fn ask_reports_a_stdout_write_failure_rather_than_swallowing_it() {
 
     let mut out = Broken;
     let mut err = Recorder::default();
-    let failure = emit_ask(false, "m", None, &mut out, &mut err, |on_delta| {
-        on_delta("hi")?;
-        Ok(answer("hi"))
-    })
+    let failure = emit_ask(
+        false,
+        AskSettings::new("m", None),
+        &mut out,
+        &mut err,
+        |on_delta| {
+            on_delta("hi")?;
+            Ok(answer("hi"))
+        },
+    )
     .unwrap_err();
 
     match failure {
@@ -1345,7 +1386,9 @@ fn json_mode_puts_exactly_one_json_document_on_stdout() {
         serde_json::to_value(AskOutput {
             model: "gpt-5.4-mini".to_string(),
             effort: Some("medium".to_string()),
+            verbosity: None,
             text: "ASKCODEX-VERIFY-OK".to_string(),
+            json: None,
             usage: None,
         })
         .unwrap(),
@@ -2010,4 +2053,262 @@ fn a_401_under_no_refresh_is_reported_once_and_rotates_nothing() {
     mock.assert_calls(1);
     home.assert_auth_untouched();
     home.assert_left_nothing_behind();
+}
+
+/// A real 1x1 RGBA PNG (valid chunks), the same bytes the image endpoint
+/// tests embed.
+const TINY_RGBA_PNG: [u8; 70] = [
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+    0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0xfc, 0xcf, 0xc0, 0x50,
+    0x0f, 0x00, 0x04, 0x85, 0x01, 0x80, 0x84, 0xa9, 0x8c, 0x21, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+    0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+];
+
+/// Re-seal the IHDR CRC after a test edits header bytes, so the edit is
+/// read as a different valid header rather than as corruption.
+fn reseal_ihdr(png: &mut [u8]) {
+    let crc = crc32(&png[12..29]).to_be_bytes();
+    png[29..33].copy_from_slice(&crc);
+}
+
+#[test]
+fn png_facts_read_the_file_not_the_backends_claims() {
+    assert_eq!(
+        png_facts(&TINY_RGBA_PNG),
+        Some(PngFacts {
+            width: 1,
+            height: 1,
+            alpha_channel: true
+        })
+    );
+    // Same header, colour type 2 (RGB): no alpha channel.
+    let mut rgb = TINY_RGBA_PNG;
+    rgb[25] = 2;
+    reseal_ihdr(&mut rgb);
+    assert_eq!(png_facts(&rgb).map(|f| f.alpha_channel), Some(false));
+    // Palette images carry transparency only through a tRNS chunk.
+    let mut palette = TINY_RGBA_PNG[..33].to_vec();
+    palette[25] = 3;
+    reseal_ihdr(&mut palette);
+    let chunk = |kind: &[u8], data: &[u8]| {
+        let mut c = (data.len() as u32).to_be_bytes().to_vec();
+        c.extend_from_slice(kind);
+        c.extend_from_slice(data);
+        c.extend_from_slice(&crc32(&c[4..]).to_be_bytes());
+        c
+    };
+    let mut with_trns = palette.clone();
+    with_trns.extend(chunk(b"PLTE", &[0, 0, 0]));
+    with_trns.extend(chunk(b"tRNS", &[0]));
+    with_trns.extend(chunk(b"IDAT", &[]));
+    assert_eq!(png_facts(&with_trns).map(|f| f.alpha_channel), Some(true));
+    // A tRNS chunk that is cut short or fails its CRC proves nothing.
+    let mut corrupted = palette.clone();
+    corrupted.extend(chunk(b"PLTE", &[0, 0, 0]));
+    let trns_at = corrupted.len();
+    corrupted.extend(chunk(b"tRNS", &[0]));
+    let mut truncated = corrupted.clone();
+    truncated.truncate(trns_at + 9);
+    assert_eq!(png_facts(&truncated), None);
+    corrupted[trns_at + 8] ^= 1;
+    corrupted.extend(chunk(b"IDAT", &[]));
+    assert_eq!(png_facts(&corrupted), None);
+    let mut without = palette.clone();
+    without.extend(chunk(b"PLTE", &[0, 0, 0]));
+    without.extend(chunk(b"IDAT", &[]));
+    assert_eq!(png_facts(&without).map(|f| f.alpha_channel), Some(false));
+    // Gray and truecolor images carry simple transparency the same way.
+    for color_type in [0u8, 2] {
+        let mut keyed = palette.clone();
+        keyed[25] = color_type;
+        reseal_ihdr(&mut keyed);
+        keyed.extend(chunk(b"tRNS", &[0, 0, 0, 0, 0, 0]));
+        keyed.extend(chunk(b"IDAT", &[]));
+        assert_eq!(
+            png_facts(&keyed).map(|f| f.alpha_channel),
+            Some(true),
+            "color type {color_type}"
+        );
+    }
+    // No IHDR: unknown, never zeros.
+    assert_eq!(png_facts(&png_fixture()), None);
+    // A broken signature tail is not a PNG, whatever follows it.
+    let mut forged = TINY_RGBA_PNG;
+    forged[6] = b'X';
+    assert_eq!(png_facts(&forged), None);
+    // A zero dimension is not an image either.
+    let mut empty = TINY_RGBA_PNG;
+    empty[16..20].copy_from_slice(&[0, 0, 0, 0]);
+    reseal_ihdr(&mut empty);
+    assert_eq!(png_facts(&empty), None);
+    // A flipped width bit with the old CRC is corruption, not a size.
+    let mut flipped = TINY_RGBA_PNG;
+    flipped[19] ^= 0x02;
+    assert_eq!(png_facts(&flipped), None);
+    let mut resealed = flipped;
+    reseal_ihdr(&mut resealed);
+    assert_eq!(png_facts(&resealed).map(|f| f.width), Some(3));
+}
+
+#[test]
+fn image_json_reports_pixels_alpha_and_the_backend_background() {
+    let dir = ScratchDir::new("png-facts");
+    let path = dir.join("cut.png");
+    let image = ImageResult {
+        png: TINY_RGBA_PNG.to_vec(),
+        size: Some("1254x1254".to_string()),
+        background: Some("transparent".to_string()),
+    };
+    let mut out = Recorder::default();
+    save_image(&image, &path, None, true, &mut out).unwrap();
+    let result = out.semantic_result("image create");
+    assert_eq!(result["size"], "1254x1254", "the backend's claim is kept");
+    assert_eq!(result["width"], 1, "and the file's own size is reported");
+    assert_eq!(result["height"], 1);
+    assert_eq!(result["alpha_channel"], true);
+    assert_eq!(result["background"], "transparent");
+}
+
+#[test]
+fn a_schema_answer_is_returned_parsed() {
+    let mut out = Recorder::default();
+    let mut err = Recorder::default();
+    let schema = json!({"type": "object", "additionalProperties": false,
+                        "required": ["product", "severity"],
+                        "properties": {"product": {"type": "string"}, "severity": {"type": "integer"}}});
+    let settings = AskSettings {
+        schema: Some(&schema),
+        verbosity: Some("low"),
+        ..AskSettings::new("m", Some("low"))
+    };
+    emit_ask(true, settings, &mut out, &mut err, |_| {
+        Ok(answer(r#"{"product":"app","severity":2}"#))
+    })
+    .unwrap();
+    let result = out.semantic_result("ask");
+    assert_eq!(result["json"], json!({"product": "app", "severity": 2}));
+    assert_eq!(result["verbosity"], "low");
+    assert_eq!(result["text"], r#"{"product":"app","severity":2}"#);
+}
+
+#[test]
+fn a_schema_answer_that_is_not_json_is_a_failure_not_a_result() {
+    for text in ["", "Sure! Here is the JSON:", "{\"cut\": "] {
+        let mut out = Recorder::default();
+        let mut err = Recorder::default();
+        let schema = json!({});
+        let settings = AskSettings {
+            schema: Some(&schema),
+            ..AskSettings::new("m", None)
+        };
+        let failure =
+            emit_ask(true, settings, &mut out, &mut err, |_| Ok(answer(text))).unwrap_err();
+        assert_eq!(failure.code(), "response_invalid", "{text:?}");
+        assert!(out.bytes.is_empty(), "no result document for {text:?}");
+    }
+}
+
+#[test]
+fn a_failed_schema_answer_never_quotes_the_answer_and_never_rounds() {
+    const SENTINEL: &str = "PRIVATE-SENTINEL-4417";
+    for text in [
+        format!("{{\"name\": \"{SENTINEL}\", "),
+        format!("{{\"name\": \"{SENTINEL}\", \"id\": 18446744073709551617}}"),
+    ] {
+        let mut out = Recorder::default();
+        let mut err = Recorder::default();
+        let schema = json!({});
+        let settings = AskSettings {
+            schema: Some(&schema),
+            ..AskSettings::new("m", None)
+        };
+        let failure =
+            emit_ask(true, settings, &mut out, &mut err, |_| Ok(answer(&text))).unwrap_err();
+        assert_eq!(failure.code(), "response_invalid");
+        let mut diagnostic = Vec::new();
+        failure.write_diagnostic(&mut diagnostic, true).unwrap();
+        let diagnostic = String::from_utf8(diagnostic).unwrap();
+        assert!(
+            !diagnostic.contains(SENTINEL),
+            "answer leaked: {diagnostic}"
+        );
+        assert!(!failure.to_string().contains(SENTINEL));
+        assert!(out.bytes.is_empty());
+    }
+}
+
+#[test]
+fn a_parsed_answer_that_breaks_the_schema_is_a_failure_not_a_result() {
+    // The backend enforced the schema in every live call, but that is an
+    // observation: a well-formed answer of the wrong shape must still fail.
+    let schema = json!({"type": "object", "additionalProperties": false,
+                        "required": ["name", "severity"],
+                        "properties": {"name": {"type": "string"},
+                                       "severity": {"type": "integer", "enum": [1, 2, 3]}}});
+    for text in [
+        r#"{"name": "PRIVATE-SENTINEL-4417"}"#,
+        r#"{"name": "PRIVATE-SENTINEL-4417", "severity": 9}"#,
+        r#"{"name": "PRIVATE-SENTINEL-4417", "severity": 1, "extra": true}"#,
+    ] {
+        let mut out = Recorder::default();
+        let mut err = Recorder::default();
+        let settings = AskSettings {
+            schema: Some(&schema),
+            ..AskSettings::new("m", None)
+        };
+        let failure =
+            emit_ask(true, settings, &mut out, &mut err, |_| Ok(answer(text))).unwrap_err();
+        assert_eq!(failure.code(), "response_invalid", "{text}");
+        assert!(
+            failure.to_string().contains("does not match the schema"),
+            "{failure}"
+        );
+        assert!(
+            !failure.to_string().contains("PRIVATE-SENTINEL"),
+            "{failure}"
+        );
+        assert!(out.bytes.is_empty(), "no result for {text}");
+    }
+}
+
+#[test]
+fn a_schema_with_a_lossy_integer_is_refused_before_sending() {
+    let dir = ScratchDir::new("schema-lossy");
+    let path = dir.join("s.json");
+    std::fs::write(
+        &path,
+        r#"{"type": "integer", "maximum": 18446744073709551617}"#,
+    )
+    .unwrap();
+    let err = read_schema(&path).unwrap_err();
+    assert_eq!(err.code(), "input_invalid");
+    std::fs::write(
+        &path,
+        r#"{"type": "integer", "maximum": 18446744073709551615}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        read_schema(&path).unwrap()["maximum"].as_u64(),
+        Some(u64::MAX)
+    );
+}
+
+#[test]
+fn the_backend_document_rides_along_only_with_the_flag() {
+    let raw = json!({"models": [{"slug": "m", "base_instructions": "long"}]});
+    let result = json!({"models": [{"slug": "m"}]});
+
+    let mut out = Recorder::default();
+    emit_inspectable(&mut out, Output::from(true), "models", &result, &raw).unwrap();
+    let doc = out.single_json_document();
+    assert!(doc.get("backend").is_none(), "{doc}");
+
+    let mut out = Recorder::default();
+    let output = Output {
+        mode: Mode::Json,
+        backend: true,
+    };
+    emit_inspectable(&mut out, output, "models", &result, &raw).unwrap();
+    assert_eq!(out.single_json_document()["backend"], raw);
 }

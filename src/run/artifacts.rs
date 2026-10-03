@@ -93,22 +93,122 @@ pub(super) fn save_image(
     let mode = mode.into();
     let bytes = write_png(&image.png, path)?;
     let size = image.size.as_deref();
+    let facts = png_facts(&image.png);
+    let background = image.background.as_deref();
     if mode != Mode::Text {
         let command = if ref_images.is_some() {
             "image edit"
         } else {
             "image create"
         };
-        emit_result(
-            out,
-            mode,
-            command,
-            &image_json(path, size, bytes, ref_images),
-            None,
-        )
+        let mut result = image_json(path, size, bytes, ref_images);
+        result["width"] = json!(facts.map(|f| f.width));
+        result["height"] = json!(facts.map(|f| f.height));
+        result["alpha_channel"] = json!(facts.map(|f| f.alpha_channel));
+        result["background"] = json!(background);
+        emit_result(out, mode, command, &result, None)
     } else {
-        emit_human(out, &render_image_saved(path, size, bytes, ref_images))
+        let mut text = render_image_saved(path, size, bytes, ref_images);
+        text.push_str(&render_png_facts(facts, background));
+        emit_human(out, &text)
     }
+}
+
+/// What the saved file itself declares, read from its IHDR (and, for a
+/// palette image, whether a `tRNS` chunk precedes the image data). The
+/// backend's `size` and `background` are claims; these are the bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct PngFacts {
+    pub width: u32,
+    pub height: u32,
+    /// The PNG can carry transparency (RGBA, gray+alpha, or a gray,
+    /// truecolor or palette image with `tRNS`). It does not say how many
+    /// pixels are actually transparent.
+    pub alpha_channel: bool,
+}
+
+/// `None` when the header is not a well-formed IHDR, so nothing is guessed.
+pub(super) fn png_facts(png: &[u8]) -> Option<PngFacts> {
+    const SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
+    // The download path checks only the first four bytes; facts are read
+    // from a file that carries the whole signature, or not at all.
+    if png.get(..SIGNATURE.len())? != SIGNATURE {
+        return None;
+    }
+    // length (4) + type (4) + data (13) + CRC (4); a CRC that does not
+    // match means the header bytes are not the ones the encoder wrote.
+    let ihdr = png.get(SIGNATURE.len()..SIGNATURE.len() + 8 + 13 + 4)?;
+    if ihdr[0..4] != [0, 0, 0, 13] || &ihdr[4..8] != b"IHDR" {
+        return None;
+    }
+    if crc32(&ihdr[4..21]).to_be_bytes() != ihdr[21..25] {
+        return None;
+    }
+    let width = u32::from_be_bytes(ihdr[8..12].try_into().ok()?);
+    let height = u32::from_be_bytes(ihdr[12..16].try_into().ok()?);
+    // PNG forbids a zero dimension; such a header describes no image.
+    if width == 0 || height == 0 {
+        return None;
+    }
+    // Gray, truecolor and palette images can all carry simple transparency
+    // in a `tRNS` chunk; only gray+alpha and RGBA always have a channel.
+    let alpha_channel = match ihdr[17] {
+        4 | 6 => true,
+        0 | 2 | 3 => has_trns(png)?,
+        _ => return None,
+    };
+    Some(PngFacts {
+        width,
+        height,
+        alpha_channel,
+    })
+}
+
+/// The PNG chunk CRC (CRC-32/ISO-HDLC, as in zlib), bitwise: it runs over
+/// IHDR and at most one short `tRNS` chunk per saved image, so a table buys
+/// nothing.
+pub(super) fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0xffff_ffff_u32;
+    for &byte in bytes {
+        crc ^= u32::from(byte);
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ (0xedb8_8320 & (crc & 1).wrapping_neg());
+        }
+    }
+    !crc
+}
+
+/// Walk the chunks after IHDR until the image data starts.
+fn has_trns(png: &[u8]) -> Option<bool> {
+    let mut at = 8;
+    loop {
+        let len = u32::from_be_bytes(png.get(at..at + 4)?.try_into().ok()?) as usize;
+        match png.get(at + 4..at + 8)? {
+            // Transparency is reported only from a complete chunk whose
+            // CRC matches; anything else leaves the facts unknown.
+            b"tRNS" => {
+                let end = at.checked_add(8)?.checked_add(len)?;
+                let crc = png.get(end..end.checked_add(4)?)?;
+                return (crc32(png.get(at + 4..end)?).to_be_bytes() == crc).then_some(true);
+            }
+            b"IDAT" | b"IEND" => return Some(false),
+            _ => at = at.checked_add(12)?.checked_add(len)?,
+        }
+    }
+}
+
+pub(super) fn render_png_facts(facts: Option<PngFacts>, background: Option<&str>) -> String {
+    let pixels = facts.map_or(UNKNOWN.to_string(), |f| format!("{}x{}", f.width, f.height));
+    let alpha = match facts {
+        Some(PngFacts {
+            alpha_channel: true,
+            ..
+        }) => "yes",
+        Some(_) => "no",
+        None => UNKNOWN,
+    };
+    let background = background.unwrap_or(ABSENT);
+    format!("  pixels {pixels}, alpha channel {alpha}, backend background {background}\n")
 }
 
 pub(super) fn write_png(bytes: &[u8], path: &Path) -> Result<usize, Error> {

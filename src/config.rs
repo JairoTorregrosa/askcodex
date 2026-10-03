@@ -83,6 +83,12 @@ pub const BODY_LIMIT_BYTES: u64 = 64 * 1024 * 1024;
 /// Max bytes of an error/refresh response body quoted in error messages.
 pub const ERROR_SNIPPET_BYTES: usize = 400;
 
+/// Max bytes of a non-2xx backend body read to recover its JSON error
+/// object for machine diagnostics (`error.backend`). Only the first
+/// `ERROR_SNIPPET_BYTES` are quoted in the message; a body longer than this
+/// yields no `error.backend` rather than a guess from a truncated document.
+pub const ERROR_BODY_PARSE_BYTES: usize = 16 * 1024;
+
 /// Resolve the codex home directory.
 ///
 /// Honors `$CODEX_HOME` verbatim when set and non-empty (no tilde

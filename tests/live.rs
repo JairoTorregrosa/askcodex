@@ -843,7 +843,7 @@ fn live_raw_get_codex_usage_reaches_the_same_endpoint_as_the_usage_command() {
     // Same endpoint, same document shape. Only the KEY SET is compared:
     // the values (percentages, reset counters) move between two calls, and
     // asserting them would produce a flake, not a finding.
-    let via_command = live.run(&["--json", "usage"]).backend();
+    let via_command = live.run(&["--json", "--backend", "usage"]).backend();
     let command_object = via_command
         .as_object()
         .unwrap_or_else(|| panic!("usage --json: expected a JSON object"));

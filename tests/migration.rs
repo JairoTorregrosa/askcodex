@@ -202,7 +202,12 @@ fn local_errors_win_over_broken_auth_and_never_mutate_it() {
     let sandbox = Sandbox::new();
     sandbox.auth(b"deliberately malformed credentials");
     fs::write(sandbox.0.join("broken.wav"), b"not audio").unwrap();
+    fs::write(sandbox.0.join("bad-schema.json"), b"{\"type\": ").unwrap();
+    fs::write(sandbox.0.join("list-schema.json"), b"[1, 2]").unwrap();
     let cases: &[(&[&str], &[u8])] = &[
+        (&["ask", "x", "--schema", "missing-schema.json"], b""),
+        (&["ask", "x", "--schema", "bad-schema.json"], b""),
+        (&["ask", "x", "--schema", "list-schema.json"], b""),
         (&["transcribe", "missing.wav"], b""),
         (&["transcribe", "broken.wav"], b""),
         (&["image", "edit", "p", "-i", "missing.png"], b""),
@@ -268,11 +273,18 @@ fn output_mode_conflicts_fail_locally() {
     for args in [
         vec!["--json", "--events", "auth", "status"],
         vec!["--events", "raw", "GET", "/codex/usage"],
+        vec!["models", "--backend"],
+        vec!["--events", "usage", "--backend"],
     ] {
         let output = sandbox.run(&args, b"");
         assert!(!output.status.success());
         assert!(output.stdout.is_empty());
     }
+    // `--backend` without `--json` is a usage error (exit 2), like any
+    // other flag combination clap refuses.
+    let output = sandbox.run(&["models", "--backend"], b"");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--backend requires --json"));
 }
 
 #[test]

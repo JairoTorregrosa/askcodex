@@ -151,7 +151,11 @@ pub struct ModelsResponse {
     pub models: Vec<ModelInfo>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+/// One catalog entry, reduced to what a caller needs to pick a model. The
+/// backend sends ~50 keys per model (most of them Codex's own prompts and
+/// tool settings); `--backend` returns the whole document. Absent keys are
+/// `null`, never a guessed default.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct ModelInfo {
     pub slug: String,
     #[serde(default)]
@@ -159,6 +163,17 @@ pub struct ModelInfo {
     #[serde(default)]
     pub supported_reasoning_levels: Vec<ReasoningLevel>,
     pub visibility: Option<String>,
+    pub display_name: Option<String>,
+    pub description: Option<String>,
+    /// Codex's default effort for this model. `ask` does not use it: it
+    /// always sends `--effort` (default `medium`).
+    pub default_reasoning_level: Option<String>,
+    /// Codex's ordering; lower comes first in its picker.
+    pub priority: Option<i64>,
+    pub context_window: Option<u64>,
+    /// Verbatim `upgrade` object (`model`, `migration_markdown`,
+    /// `retirement_at`) when the backend recommends moving off this model.
+    pub upgrade: Option<Value>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -181,6 +196,10 @@ pub struct ImageGenerationRequest {
     pub prompt: String,
     /// Always `config::IMAGE_MODEL` (codex parity; backend ignores it).
     pub model: &'static str,
+    /// `transparent` | `opaque` from `--background`; absent unless the user
+    /// asked, so the prompt decides.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<&'static str>,
 }
 
 /// Edit request: generation plus up to `config::MAX_EDIT_IMAGES` reference
@@ -190,6 +209,8 @@ pub struct ImageEditRequest {
     pub prompt: String,
     pub model: &'static str,
     pub images: Vec<ImageRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<&'static str>,
 }
 
 /// One reference image: `{"image_url": "data:image/png;base64,..."}`.
@@ -221,6 +242,9 @@ pub struct ImageResult {
     pub png: Vec<u8>,
     /// The `size` string the backend reported (e.g. "1254x1254"), if any.
     pub size: Option<String>,
+    /// The `background` the backend reported (`transparent`, `opaque`), if
+    /// any. Check the PNG's alpha before relying on it.
+    pub background: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -239,6 +263,46 @@ pub struct ResponsesRequest {
     pub instructions: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<Reasoning>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<TextControls>,
+}
+
+/// The Responses `text` object: verbosity and/or a strict JSON Schema
+/// output format, the same shape Codex sends (codex-api `common.rs` at
+/// rust-v0.160.0). Sent only when the user set one of them.
+#[derive(Debug, Serialize)]
+pub struct TextControls {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verbosity: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format: Option<TextFormat>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TextFormat {
+    #[serde(rename = "type")]
+    pub format_type: &'static str,
+    pub strict: bool,
+    pub schema: Value,
+    pub name: &'static str,
+}
+
+impl TextControls {
+    /// `None` when neither control is set, so the key is not sent at all.
+    pub fn new(verbosity: Option<String>, schema: Option<Value>) -> Option<Self> {
+        if verbosity.is_none() && schema.is_none() {
+            return None;
+        }
+        Some(TextControls {
+            verbosity,
+            format: schema.map(|schema| TextFormat {
+                format_type: "json_schema",
+                strict: true,
+                schema,
+                name: "codex_output_schema",
+            }),
+        })
+    }
 }
 
 impl ResponsesRequest {
@@ -263,7 +327,14 @@ impl ResponsesRequest {
             store: false,
             instructions,
             reasoning: effort.map(|e| Reasoning { effort: e }),
+            text: None,
         }
+    }
+
+    /// Attach `--verbosity` / `--schema`; a no-op when both are unset.
+    pub fn with_text(mut self, verbosity: Option<String>, schema: Option<Value>) -> Self {
+        self.text = TextControls::new(verbosity, schema);
+        self
     }
 }
 
@@ -297,7 +368,8 @@ pub enum ResponsesSseEvent {
     /// `response.completed` — the stream is done. Carries the raw event so
     /// the caller can read `response.usage` (token counts) out of it.
     Completed { raw: Value },
-    /// `response.failed` | `response.error` | `error` — abort loudly.
+    /// `response.failed` | `response.error` | `error` |
+    /// `response.incomplete` — abort loudly.
     /// Carries the raw event for the error message.
     Error { raw: Value },
     /// Any other event type (`response.created`, `response.in_progress`,
@@ -319,9 +391,13 @@ impl ResponsesSseEvent {
                     .to_string(),
             ),
             Some("response.completed") => ResponsesSseEvent::Completed { raw: event.clone() },
-            Some("response.failed") | Some("response.error") | Some("error") => {
-                ResponsesSseEvent::Error { raw: event.clone() }
-            }
+            // `response.incomplete` is terminal too (Codex treats it as an
+            // interrupted completion): the answer is cut short, so it is a
+            // failure here, never a shorter success.
+            Some("response.failed")
+            | Some("response.error")
+            | Some("error")
+            | Some("response.incomplete") => ResponsesSseEvent::Error { raw: event.clone() },
             _ => ResponsesSseEvent::Other,
         }
     }
@@ -335,7 +411,12 @@ impl ResponsesSseEvent {
 pub struct AskOutput {
     pub model: String,
     pub effort: Option<String>,
+    /// `--verbosity` as sent, or `null` when the backend default applied.
+    pub verbosity: Option<String>,
     pub text: String,
+    /// The answer parsed as JSON. Present only with `--schema`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub json: Option<Value>,
     pub usage: Option<Value>,
 }
 
@@ -428,6 +509,65 @@ mod tests {
     }
 
     #[test]
+    fn text_controls_mirror_codex_and_are_absent_when_unset() {
+        let plain = ResponsesRequest::user_text("m", "hi", None, None).with_text(None, None);
+        let v = serde_json::to_value(&plain).unwrap();
+        assert!(
+            v.get("text").is_none(),
+            "unset controls must send no key: {v}"
+        );
+
+        let schema = serde_json::json!({"type": "object", "properties": {}, "required": [],
+                                        "additionalProperties": false});
+        let both = ResponsesRequest::user_text("m", "hi", None, None)
+            .with_text(Some("low".into()), Some(schema.clone()));
+        let v = serde_json::to_value(&both).unwrap();
+        assert_eq!(
+            v["text"],
+            serde_json::json!({
+                "verbosity": "low",
+                "format": {"type": "json_schema", "strict": true, "schema": schema,
+                           "name": "codex_output_schema"}
+            })
+        );
+
+        let only_verbosity =
+            ResponsesRequest::user_text("m", "hi", None, None).with_text(Some("high".into()), None);
+        let v = serde_json::to_value(&only_verbosity).unwrap();
+        assert_eq!(v["text"], serde_json::json!({"verbosity": "high"}));
+    }
+
+    #[test]
+    fn model_info_keeps_the_picking_fields_and_nulls_the_absent_ones() {
+        let entry = serde_json::json!({
+            "slug": "gpt-old", "visibility": "list", "display_name": "GPT-Old",
+            "description": "Legacy.", "default_reasoning_level": "medium", "priority": 13,
+            "context_window": 272000, "base_instructions": "x".repeat(5000),
+            "upgrade": {"model": "gpt-new", "retirement_at": "2026-10-14T19:00:00Z",
+                        "migration_markdown": "Switch."}
+        });
+        let model: ModelInfo = serde_json::from_value(entry).unwrap();
+        let v = serde_json::to_value(&model).unwrap();
+        assert_eq!(v["default_reasoning_level"], "medium");
+        assert_eq!(v["upgrade"]["model"], "gpt-new");
+        assert!(
+            v.get("base_instructions").is_none(),
+            "prompts stay in --backend"
+        );
+
+        let bare: ModelInfo = serde_json::from_value(serde_json::json!({"slug": "s"})).unwrap();
+        let v = serde_json::to_value(&bare).unwrap();
+        for key in [
+            "description",
+            "default_reasoning_level",
+            "priority",
+            "upgrade",
+        ] {
+            assert!(v[key].is_null(), "{key} must be null, not a default: {v}");
+        }
+    }
+
+    #[test]
     fn sse_event_classification() {
         let delta = serde_json::json!({"type": "response.output_text.delta", "delta": "Hi"});
         assert_eq!(
@@ -439,7 +579,12 @@ mod tests {
             ResponsesSseEvent::classify(&done),
             ResponsesSseEvent::Completed { raw: done.clone() }
         );
-        for t in ["response.failed", "response.error", "error"] {
+        for t in [
+            "response.failed",
+            "response.error",
+            "error",
+            "response.incomplete",
+        ] {
             let ev = serde_json::json!({"type": t, "code": "boom"});
             assert!(matches!(
                 ResponsesSseEvent::classify(&ev),

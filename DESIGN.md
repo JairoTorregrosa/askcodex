@@ -71,7 +71,7 @@ The dependency set is locked, not frozen. libc is pinned for the kernel-lock API
 
 Human output stays concise and stdout contains payload only. Semantic --json returns one schema-versioned envelope after success. --events returns compact NDJSON, with text_delta records as ask progresses and exactly one result event on success. Failure produces an error on stderr and no final result.
 
-Known result fields have documented meanings. Where available, backend preserves the complete unmodified JSON alongside the stable result. Raw remains explicit wire access and does not acquire a semantic envelope.
+Known result fields have documented meanings. Where available, `--backend` adds the complete unmodified JSON alongside the stable result (opt-in since 0.3.0; the model catalog is ~700 KB). Raw remains explicit wire access and does not acquire a semantic envelope.
 
 Input absence, response absence and completed empty output are different states. Missing required response data is an error; a completed empty transcript is valid. Unknown optional response fields do not break parsing. An SSE stream without response.completed is never successful.
 

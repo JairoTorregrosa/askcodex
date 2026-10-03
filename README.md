@@ -57,15 +57,23 @@ suppresses account details in installer output. A prebuilt binary can also be do
 ## Ask a model
 
 ```sh
-askcodex ask "Write a commit message for this change: [diff]"
+askcodex ask "Write a commit message for this change: [diff]" --verbosity low
 askcodex ask - --effort high < brief.txt
-askcodex models --json --no-refresh | jq .result.models
+askcodex ask - --schema ticket.schema.json --json < tickets.txt | jq .result.json
+askcodex models --no-refresh
 ```
 
 Answers stream as text. `-` reads up to 16 MiB of UTF-8 prompt text from stdin.
 Include the relevant
 source text in the prompt; a file path alone does not give the model its contents.
-Use the current catalog to choose `--model` and supported `--effort` values.
+`--verbosity low|medium|high` sets answer length and detail; unset, the backend
+uses its default (observed: medium). `--schema FILE` makes the backend enforce a
+JSON Schema in strict mode (every property listed in `required`,
+`additionalProperties: false`); `--json` then returns the parsed answer as
+`result.json`. askcodex re-checks the answer's structure against the schema, so
+an answer that does not parse or does not match fails instead of passing.
+`askcodex models` lists each model's description, catalog efforts, Codex's
+default effort, and any retirement date; use it to choose `--model` and `--effort`.
 `ask` defaults to `gpt-6.1-sol`. If your plan refuses it (OpenAI's Codex docs
 have offered Free and Go accounts only Luna), pass `--model gpt-6-luna`.
 
@@ -79,10 +87,12 @@ askcodex image edit "same crane, night scene, desk lamp" -i crane.png -o night.p
 <img src="assets/demo-image.png" alt="Generated origami crane made of graph paper" width="420">
 
 The backend returns one PNG per call at dimensions it chooses; state the aspect
-ratio in the prompt. Output has been opaque unless the prompt asked for a
-transparent background, which returned real alpha in the one call tried on
-2026-09-27; check the file before relying on either. There are no size,
-quality, transparency, format, batch, or image-model flags.
+ratio in the prompt. `--background transparent` or `--background opaque` forces
+the background (both honored in live calls on 2026-10-02); unset, the prompt
+decides, and output has been opaque unless the prompt asked for transparency.
+The result reports the file's real width, height and whether it has an alpha
+channel. There are no size, quality, format, batch, or image-model flags,
+because the backend ignores them.
 Edit accepts up to five PNG references totaling at most 25 MiB; changing an
 extension does not convert an image. Local references and output paths are checked before authentication.
 Save useful versions under distinct names and inspect the actual result.
@@ -136,17 +146,21 @@ coordinate with another application writing the same file.
 Semantic commands with `--json` print one versioned document on success:
 
 ```json
-{"schema_version":1,"command":"ask","result":{"model":"example-model","effort":null,"text":"Example answer","usage":null}}
+{"schema_version":1,"command":"ask","result":{"model":"example-model","effort":null,"verbosity":null,"text":"Example answer","usage":null}}
 ```
 
-`result` is the command result. An optional `backend` field preserves the
-original response for commands that expose it; backend fields are not a stable
-askcodex schema. Use these paths in scripts:
+`result` is the command result. `--backend` (with `--json`) adds a `backend`
+field holding the original response of `usage`, `models` and `transcribe`;
+backend fields are not a stable askcodex schema, and since 0.3.0 they are
+opt-in because the model catalog alone is about 700 KB. A failed call prints a
+JSON diagnostic on stderr whose `error.backend` carries the actionable fields
+of the backend's own error object (for example `code: "unsupported_value"`,
+`param: "reasoning.effort"`), and nothing else it sent. Use these paths in scripts:
 
 ```sh
 askcodex ask - --json < brief.txt > answer.json
 jq -r .result.text answer.json
-askcodex models --json --no-refresh | jq .result.models
+askcodex models --json --no-refresh | jq '.result.models[] | {slug, description}'
 askcodex usage --json --no-refresh | jq .result.rate_limit
 ```
 

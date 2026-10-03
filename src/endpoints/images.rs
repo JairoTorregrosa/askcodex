@@ -27,6 +27,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use serde_json::Value;
 
+use crate::cli::Background;
 use crate::config;
 use crate::error::Error;
 use crate::http::Client;
@@ -62,14 +63,21 @@ const PNG_MAGIC: [u8; 4] = [0x89, b'P', b'N', b'G'];
 /// - Verify the PNG magic `\x89PNG`; anything else ->
 ///   `Error::ImageNotPng { magic_hex }` (first 4 bytes, hex). NO placeholder
 ///   output ever.
-/// - Returns bytes + reported size; the CALLER (run.rs) writes the file.
-pub fn create(client: &mut Client, prompt: &str) -> Result<ImageResult, Error> {
-    // Exactly two fields on the wire. The backend accepts and then IGNORES
-    // size/quality/background/output_format/n (and even model), so askcodex
-    // sends none of them: an accepted-and-discarded knob is a lie.
+/// - Returns bytes + reported size and background; the CALLER (run.rs)
+///   writes the file.
+pub fn create(
+    client: &mut Client,
+    prompt: &str,
+    background: Option<Background>,
+) -> Result<ImageResult, Error> {
+    // Two fields on the wire, plus `background` when the user forced one.
+    // The backend accepts and then IGNORES size/quality/output_format/n (and
+    // even model), so askcodex sends none of them: an accepted-and-discarded
+    // knob is a lie. `background` is honored both ways (PROTOCOL §5).
     let request = ImageGenerationRequest {
         prompt: prompt.to_string(),
         model: config::IMAGE_MODEL,
+        background: background.map(Background::as_str),
     };
 
     let body = serde_json::to_value(&request)?;
@@ -97,7 +105,7 @@ pub fn create(client: &mut Client, prompt: &str) -> Result<ImageResult, Error> {
 /// request that was going to be refused is never billed.
 #[cfg(test)]
 pub fn edit(client: &mut Client, prompt: &str, inputs: &[&Path]) -> Result<ImageResult, Error> {
-    PreparedEdit::read(prompt, inputs)?.send(client)
+    PreparedEdit::read(prompt, inputs, None)?.send(client)
 }
 
 /// Validated reference bytes, ready to upload without rereading local files.
@@ -119,7 +127,11 @@ impl PreparedEdit {
         self.count
     }
 
-    pub fn read(prompt: &str, inputs: &[&Path]) -> Result<Self, Error> {
+    pub fn read(
+        prompt: &str,
+        inputs: &[&Path],
+        background: Option<Background>,
+    ) -> Result<Self, Error> {
         // Guard first, and on the count alone: rejecting six references must
         // not depend on six files being readable, and must not cost a round
         // trip the backend would refuse anyway.
@@ -147,6 +159,7 @@ impl PreparedEdit {
             prompt: prompt.to_string(),
             model: config::IMAGE_MODEL,
             images,
+            background: background.map(Background::as_str),
         };
 
         let body = serde_json::to_value(&request)?;
@@ -288,6 +301,7 @@ fn decode_image(response: Value) -> Result<ImageResult, Error> {
     Ok(ImageResult {
         png,
         size: decoded.size,
+        background: decoded.background,
     })
 }
 
@@ -515,11 +529,50 @@ mod tests {
         });
         let _redirect = Redirect::to(&server);
 
-        let result = create(&mut client(), "a red cube").unwrap();
+        let result = create(&mut client(), "a red cube", None).unwrap();
 
         mock.assert();
         assert_eq!(result.png, TINY_PNG);
         assert_eq!(result.size.as_deref(), Some("1254x1254"));
+    }
+
+    #[test]
+    fn create_sends_background_only_when_forced_and_reports_the_echo() {
+        let server = MockServer::start();
+        let mut envelope = ok_envelope(&TINY_PNG);
+        envelope["background"] = json!("transparent");
+        let mock = server.mock(|when, then| {
+            when.method(POST).path(GENERATIONS_PATH).json_body(json!({
+                "prompt": "a red cube",
+                "model": config::IMAGE_MODEL,
+                "background": "transparent"
+            }));
+            then.status(200)
+                .header("content-type", "application/json")
+                .json_body(envelope);
+        });
+        let _redirect = Redirect::to(&server);
+
+        let result = create(&mut client(), "a red cube", Some(Background::Transparent)).unwrap();
+
+        mock.assert();
+        assert_eq!(result.background.as_deref(), Some("transparent"));
+    }
+
+    #[test]
+    fn edit_carries_a_forced_background_next_to_the_references() {
+        let dir = std::env::temp_dir().join(format!("askcodex-bg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let reference = dir.join("ref.png");
+        std::fs::write(&reference, TINY_PNG).unwrap();
+
+        let prepared =
+            PreparedEdit::read("bluer", &[reference.as_path()], Some(Background::Opaque)).unwrap();
+        assert_eq!(prepared.body["background"], "opaque");
+        let unforced = PreparedEdit::read("bluer", &[reference.as_path()], None).unwrap();
+        assert!(unforced.body.get("background").is_none());
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -531,7 +584,7 @@ mod tests {
         });
         let _redirect = Redirect::to(&server);
 
-        let err = expect_error(create(&mut client(), "a red cube"));
+        let err = expect_error(create(&mut client(), "a red cube", None));
 
         assert_eq!(mock.calls(), 1);
         match err {
@@ -822,7 +875,7 @@ mod tests {
         });
         let _redirect = Redirect::to(&server);
 
-        let err = expect_error(create(&mut client(), "a red cube"));
+        let err = expect_error(create(&mut client(), "a red cube", None));
 
         match err {
             // "GIF8" in hex.
@@ -842,7 +895,7 @@ mod tests {
         });
         let _redirect = Redirect::to(&server);
 
-        let err = expect_error(create(&mut client(), "a red cube"));
+        let err = expect_error(create(&mut client(), "a red cube", None));
 
         match err {
             Error::ImageNotPng { magic_hex } => assert_eq!(magic_hex, "<empty payload>"),
@@ -879,7 +932,7 @@ mod tests {
         });
         let _redirect = Redirect::to(&server);
 
-        let err = expect_error(create(&mut client(), "a red cube"));
+        let err = expect_error(create(&mut client(), "a red cube", None));
 
         match err {
             Error::UnexpectedResponse { context } => {
@@ -903,7 +956,7 @@ mod tests {
         });
         let _redirect = Redirect::to(&server);
 
-        let err = expect_error(create(&mut client(), "a red cube"));
+        let err = expect_error(create(&mut client(), "a red cube", None));
 
         match err {
             Error::UnexpectedResponse { context } => {
@@ -925,7 +978,7 @@ mod tests {
         });
         let _redirect = Redirect::to(&server);
 
-        let err = expect_error(create(&mut client(), "a red cube"));
+        let err = expect_error(create(&mut client(), "a red cube", None));
 
         match err {
             Error::UnexpectedResponse { context } => {
@@ -946,7 +999,7 @@ mod tests {
         });
         let _redirect = Redirect::to(&server);
 
-        let err = expect_error(create(&mut client(), "a red cube"));
+        let err = expect_error(create(&mut client(), "a red cube", None));
 
         match err {
             Error::UnexpectedResponse { context } => {
@@ -965,7 +1018,7 @@ mod tests {
         });
         let _redirect = Redirect::to(&server);
 
-        let err = expect_error(create(&mut client(), "a red cube"));
+        let err = expect_error(create(&mut client(), "a red cube", None));
 
         match err {
             Error::UnexpectedResponse { context } => {
@@ -985,7 +1038,7 @@ mod tests {
         });
         let _redirect = Redirect::to(&server);
 
-        let result = create(&mut client(), "a red cube").unwrap();
+        let result = create(&mut client(), "a red cube", None).unwrap();
 
         assert_eq!(result.png, TINY_PNG);
         assert!(
