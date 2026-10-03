@@ -165,7 +165,8 @@ pub(super) fn png_facts(png: &[u8]) -> Option<PngFacts> {
 }
 
 /// The PNG chunk CRC (CRC-32/ISO-HDLC, as in zlib), bitwise: it runs over
-/// 17 bytes once per saved image, so a table buys nothing.
+/// IHDR and at most one short `tRNS` chunk per saved image, so a table buys
+/// nothing.
 pub(super) fn crc32(bytes: &[u8]) -> u32 {
     let mut crc = 0xffff_ffff_u32;
     for &byte in bytes {
@@ -183,7 +184,13 @@ fn has_trns(png: &[u8]) -> Option<bool> {
     loop {
         let len = u32::from_be_bytes(png.get(at..at + 4)?.try_into().ok()?) as usize;
         match png.get(at + 4..at + 8)? {
-            b"tRNS" => return Some(true),
+            // Transparency is reported only from a complete chunk whose
+            // CRC matches; anything else leaves the facts unknown.
+            b"tRNS" => {
+                let end = at.checked_add(8)?.checked_add(len)?;
+                let crc = png.get(end..end.checked_add(4)?)?;
+                return (crc32(png.get(at + 4..end)?).to_be_bytes() == crc).then_some(true);
+            }
             b"IDAT" | b"IEND" => return Some(false),
             _ => at = at.checked_add(12)?.checked_add(len)?,
         }

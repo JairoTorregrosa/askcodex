@@ -2095,7 +2095,7 @@ fn png_facts_read_the_file_not_the_backends_claims() {
         let mut c = (data.len() as u32).to_be_bytes().to_vec();
         c.extend_from_slice(kind);
         c.extend_from_slice(data);
-        c.extend_from_slice(&[0, 0, 0, 0]);
+        c.extend_from_slice(&crc32(&c[4..]).to_be_bytes());
         c
     };
     let mut with_trns = palette.clone();
@@ -2103,6 +2103,17 @@ fn png_facts_read_the_file_not_the_backends_claims() {
     with_trns.extend(chunk(b"tRNS", &[0]));
     with_trns.extend(chunk(b"IDAT", &[]));
     assert_eq!(png_facts(&with_trns).map(|f| f.alpha_channel), Some(true));
+    // A tRNS chunk that is cut short or fails its CRC proves nothing.
+    let mut corrupted = palette.clone();
+    corrupted.extend(chunk(b"PLTE", &[0, 0, 0]));
+    let trns_at = corrupted.len();
+    corrupted.extend(chunk(b"tRNS", &[0]));
+    let mut truncated = corrupted.clone();
+    truncated.truncate(trns_at + 9);
+    assert_eq!(png_facts(&truncated), None);
+    corrupted[trns_at + 8] ^= 1;
+    corrupted.extend(chunk(b"IDAT", &[]));
+    assert_eq!(png_facts(&corrupted), None);
     let mut without = palette.clone();
     without.extend(chunk(b"PLTE", &[0, 0, 0]));
     without.extend(chunk(b"IDAT", &[]));

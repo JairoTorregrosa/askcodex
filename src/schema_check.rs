@@ -14,7 +14,9 @@
 //! - `anyOf`, `allOf`, `oneOf`, `not`,
 //! - `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`,
 //!   `minLength`, `maxLength`,
-//! - local `$ref` (`#`, `#/$defs/...`, any JSON pointer into the schema).
+//! - local `$ref` (`#`, `#/$defs/...`, any JSON pointer into the schema);
+//!   under a draft-07 or older `$schema`, the keywords beside a `$ref` are
+//!   ignored, as those drafts require.
 //!
 //! `pattern`, `format`, `multipleOf` and the other value keywords are left to
 //! the backend; docs/OUTPUT.md says so. Errors name a JSON pointer and the
@@ -44,11 +46,21 @@ impl std::fmt::Display for Violation {
 
 /// Check `answer` against `schema`; `Ok(())` when nothing is violated.
 pub fn check(schema: &Value, answer: &Value) -> Result<(), Violation> {
-    Checker { root: schema }.check(schema, answer, "", 0)
+    let dialect = schema.get("$schema").and_then(Value::as_str).unwrap_or("");
+    let ref_replaces_siblings = ["draft-03", "draft-04", "draft-06", "draft-07"]
+        .iter()
+        .any(|draft| dialect.contains(draft));
+    Checker {
+        root: schema,
+        ref_replaces_siblings,
+    }
+    .check(schema, answer, "", 0)
 }
 
 struct Checker<'a> {
     root: &'a Value,
+    /// Draft-07 and older: a `$ref` makes every keyword beside it inert.
+    ref_replaces_siblings: bool,
 }
 
 fn fail(at: &str, rule: impl Into<String>) -> Result<(), Violation> {
@@ -159,6 +171,9 @@ impl Checker<'_> {
         if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
             let target = self.resolve(reference, at)?;
             self.check(target, value, at, next)?;
+            if self.ref_replaces_siblings {
+                return Ok(());
+            }
         }
         self.check_type(schema, value, at)?;
         self.check_choices(schema, value, at)?;
@@ -308,6 +323,20 @@ impl Checker<'_> {
             _ => return false,
         };
         let next = depth + 1;
+        let reference = |reference: Option<&str>| match reference {
+            Some(reference) => match reference
+                .strip_prefix('#')
+                .and_then(|p| self.root.pointer(p))
+            {
+                Some(target) => self.fully_checked(target, next),
+                None => false,
+            },
+            None => true,
+        };
+        let target = schema.get("$ref").and_then(Value::as_str);
+        if self.ref_replaces_siblings && target.is_some() {
+            return reference(target);
+        }
         let known = |key: &str| EVALUATED.contains(&key) || ANNOTATIONS.contains(&key);
         if !schema.keys().all(|key| known(key)) {
             return false;
@@ -340,17 +369,7 @@ impl Checker<'_> {
                     .filter_map(|k| schema.get(*k).and_then(Value::as_array))
                     .flatten(),
             );
-        let reference = match schema.get("$ref").and_then(Value::as_str) {
-            Some(reference) => match reference
-                .strip_prefix('#')
-                .and_then(|p| self.root.pointer(p))
-            {
-                Some(target) => self.fully_checked(target, next),
-                None => false,
-            },
-            None => true,
-        };
-        reference
+        reference(target)
             && subschemas
                 .into_iter()
                 .all(|sub| self.fully_checked(sub, next))
@@ -629,6 +648,26 @@ mod tests {
         let below_5 = json!({"maximum": 5, "exclusiveMaximum": true});
         assert!(check(&below_5, &json!(5)).is_err());
         assert!(check(&json!({"not": {"minimum": "5"}}), &json!(1)).is_ok());
+    }
+
+    #[test]
+    fn draft_07_ignores_the_keywords_beside_a_ref() {
+        let sibling = |dialect: &str| {
+            json!({"$schema": dialect, "$ref": "#/definitions/n", "type": "string",
+                   "definitions": {"n": {"type": "integer"}}})
+        };
+        let draft_07 = sibling("http://json-schema.org/draft-07/schema#");
+        assert!(check(&draft_07, &json!(1)).is_ok());
+        assert!(
+            check(&draft_07, &json!("1")).is_err(),
+            "the $ref still applies"
+        );
+        // 2019-09 and later apply both, as does a schema with no `$schema`.
+        let current = sibling("https://json-schema.org/draft/2020-12/schema");
+        assert!(check(&current, &json!(1)).is_err());
+        let mut undeclared = sibling("");
+        undeclared.as_object_mut().unwrap().remove("$schema");
+        assert!(check(&undeclared, &json!(1)).is_err());
     }
 
     #[test]
