@@ -55,9 +55,8 @@ Answers stream as text. `-` reads up to 16 MiB of UTF-8 prompt text from stdin.
 Include the relevant
 source text in the prompt; a file path alone does not give the model its contents.
 Use the current catalog to choose `--model` and supported `--effort` values.
-`ask` defaults to `gpt-6-sol`; OpenAI's Codex docs offer Free and Go accounts
-only `gpt-6-luna`, so on those plans pass `--model gpt-6-luna` if the default
-is refused.
+`ask` defaults to `gpt-6.1-sol`. If your plan refuses it (OpenAI's Codex docs
+have offered Free and Go accounts only Luna), pass `--model gpt-6-luna`.
 
 ## Create and edit images
 

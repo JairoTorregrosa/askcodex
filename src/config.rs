@@ -37,13 +37,14 @@ pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 pub const ORIGINATOR: &str = "codex_cli_rs";
 
 /// Client version reported to `/codex/models` (query param is required by
-/// the backend). The backend hides every model whose `minimal_client_version`
-/// is newer than this value (the gpt-6 models need 0.153.0/0.155.0), so bump
-/// it to the latest stable Codex release when new models ship.
-pub const CLIENT_VERSION: &str = "0.157.1";
+/// the backend). The backend omits models it considers too new for this
+/// value: `minimal_client_version` explains some cases, but gpt-6.1-sol
+/// (minimum 0.153.0) only appears from 0.159.0 (docs/PROTOCOL.md §3.3). Bump
+/// it to the latest stable Codex release whenever new models ship.
+pub const CLIENT_VERSION: &str = "0.160.0";
 
 /// `User-Agent` header sent on every call, codex-style.
-pub const USER_AGENT: &str = "codex_cli_rs/0.157.1 (askcodex)";
+pub const USER_AGENT: &str = "codex_cli_rs/0.160.0 (askcodex)";
 
 /// Image model slug codex always sends. The backend ignores it (a nonsense
 /// slug returns the same image; the server picks the model and the size)
@@ -51,7 +52,7 @@ pub const USER_AGENT: &str = "codex_cli_rs/0.157.1 (askcodex)";
 pub const IMAGE_MODEL: &str = "gpt-image-2";
 
 /// Default model for `askcodex ask`.
-pub const DEFAULT_ASK_MODEL: &str = "gpt-6-sol";
+pub const DEFAULT_ASK_MODEL: &str = "gpt-6.1-sol";
 
 /// Default reasoning effort for `askcodex ask`.
 pub const DEFAULT_ASK_EFFORT: &str = "medium";
