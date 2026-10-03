@@ -409,8 +409,12 @@ impl Checker<'_> {
             } else {
                 format!("{at}/*")
             };
+            // A key outside `properties` may still match a `patternProperties`
+            // regex, which is left to the backend: leave such keys unchecked.
+            let patterned = schema.contains_key("patternProperties");
             match properties.and_then(|p| p.get(key)) {
                 Some(property) => self.check(property, member, &path, depth)?,
+                None if patterned => {}
                 None => match schema.get("additionalProperties") {
                     Some(Value::Bool(false)) => {
                         return fail(at, "a property the schema does not declare is not allowed");
@@ -585,6 +589,13 @@ mod tests {
         let recursive =
             json!({"$defs": {"t": {"not": {"$ref": "#/$defs/t"}}}, "$ref": "#/$defs/t"});
         let _ = check(&recursive, &json!(1));
+        // A key that may match a `patternProperties` regex is never an
+        // "additional" property here; declared properties stay checked.
+        let patterned = json!({"type": "object", "additionalProperties": false,
+                               "properties": {"id": {"type": "integer"}},
+                               "patternProperties": {"^S_": {"type": "string"}}});
+        assert!(check(&patterned, &json!({"id": 1, "S_name": "ok"})).is_ok());
+        assert!(check(&patterned, &json!({"id": "1"})).is_err());
     }
 
     #[test]
