@@ -42,8 +42,8 @@ You are about to send one request to `gpt-6-astra` with `askcodex ask`. Astra is
    - To reproduce Codex's writing style, copy only the style lines of its prompt into `--instructions` (Codex base instructions, 0.157.1).
 3. Run it:
    ```sh
-   mkdir -p /tmp/askcodex
-   cat > /tmp/askcodex/astra-brief.txt <<'EOF'
+   W="${W:-$(mktemp -d "${TMPDIR:-/tmp}/askcodex.XXXXXX")}"  # private work dir: SKILL.md step 4
+   cat > "$W/astra-brief.txt" <<'EOF'
    Task: Decide go/no-go for this database migration before Friday's rollout.
    Context: [migration plan, schema diff, peak write rate, rollback script]
    Constraints: The rollout date and the 5-minute downtime budget are my decisions.
@@ -54,8 +54,8 @@ You are about to send one request to `gpt-6-astra` with `askcodex ask`. Astra is
    risks. For each risk give the trigger, impact, and mitigation. Plain paragraphs, no headings.
    Verification: Tie each risk to the line of the plan it comes from.
    EOF
-   askcodex ask - --model gpt-6-astra --effort xhigh --json < /tmp/askcodex/astra-brief.txt > /tmp/askcodex/astra-review.json
-   jq -r .result.text /tmp/askcodex/astra-review.json
+   askcodex ask - --model gpt-6-astra --effort xhigh --json < "$W/astra-brief.txt" > "$W/astra-review.json"
+   jq -r .result.text "$W/astra-review.json"
    ```
 4. Check the answer for these failure modes before you use it: a clarifying question where the deliverable should be; a first pass that stops short of the parts you listed; a decision that rests on an assumed fact instead of supplied evidence; assumptions stated at the top that contradict your context; Markdown structure you did not ask for; tests broader than you requested.
 

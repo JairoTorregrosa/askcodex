@@ -54,8 +54,8 @@ You are about to send one request to `gpt-6-sol` with `askcodex ask`. Since 2026
    - For style excerpts, reuse the ones in [model-gpt-6-astra.md](model-gpt-6-astra.md) ([1]).
 3. Run it:
    ```sh
-   mkdir -p /tmp/askcodex
-   cat > /tmp/askcodex/sol-brief.txt <<'EOF'
+   W="${W:-$(mktemp -d "${TMPDIR:-/tmp}/askcodex.XXXXXX")}"  # private work dir: SKILL.md step 4
+   cat > "$W/sol-brief.txt" <<'EOF'
    Task: Find why test_refund_rounding fails and give a minimal fix.
    Context: [failing test output, refund.py, the diff of the last commit]
    Constraints: Keep the public function signatures. Python 3.12, no new dependencies.
@@ -65,8 +65,8 @@ You are about to send one request to `gpt-6-sol` with `askcodex ask`. Since 2026
    EOF
    askcodex ask - --model gpt-6-sol --effort high \
      --instructions "If a detail is missing, choose a reasonable default, state it in one line, and deliver the complete result. Do not ask questions. If code or a fact that the diagnosis or fix depends on is missing, name it and withhold the diagnosis or patch instead of guessing." \
-     --json < /tmp/askcodex/sol-brief.txt > /tmp/askcodex/sol-fix.json
-   jq -r .result.text /tmp/askcodex/sol-fix.json
+     --json < "$W/sol-brief.txt" > "$W/sol-fix.json"
+   jq -r .result.text "$W/sol-fix.json"
    ```
 4. Check the answer for these failure modes before you use it: questions where the deliverable should be; a patch or diagnosis that relies on code you did not paste; a stated default that conflicts with your intent; a list you needed complete that was trimmed; work beyond the scope you defined as done.
 

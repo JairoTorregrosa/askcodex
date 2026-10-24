@@ -95,17 +95,18 @@ one observed problem at a time.
    - **Layouts and text.** Describe the hierarchy and relative positions: title above the image,
      product on the right, empty copy area on the left. Put exact text in double quotes with its
      placement, size relationship, and color. Keep copy short.
-4. Run it. Create the output directory, then generate:
+4. Run it. Create a private output directory (SKILL.md step 4), then generate:
 
    ```sh
-   mkdir -p /tmp/askcodex
-   askcodex image create "Horizontal 16:9 composition. Editorial watercolor illustration of a small neighborhood bakery. Warm cream and muted blue palette, simple ink outlines, storefront on the right, clear space on the left for a slide title. No text." -o /tmp/askcodex/bakery-v1.png
+   W="${W:-$(mktemp -d "${TMPDIR:-/tmp}/askcodex.XXXXXX")}"  # private work dir: SKILL.md step 4
+   askcodex image create "Horizontal 16:9 composition. Editorial watercolor illustration of a small neighborhood bakery. Warm cream and muted blue palette, simple ink outlines, storefront on the right, clear space on the left for a slide title. No text." -o "$W/bakery-v1.png"
    ```
 
    Inspect it, then edit one thing:
 
    ```sh
-   askcodex image edit "Horizontal 16:9 composition. Change only the blue awning to muted terracotta. Preserve the storefront, composition, linework, background, and empty space on the left. No text." -i /tmp/askcodex/bakery-v1.png -o /tmp/askcodex/bakery-v2.png
+   W="${W:-$(mktemp -d "${TMPDIR:-/tmp}/askcodex.XXXXXX")}"  # private work dir: SKILL.md step 4
+   askcodex image edit "Horizontal 16:9 composition. Change only the blue awning to muted terracotta. Preserve the storefront, composition, linework, background, and empty space on the left. No text." -i "$W/bakery-v1.png" -o "$W/bakery-v2.png"
    ```
 
    With several references, state their roles in the same order as `-i`:

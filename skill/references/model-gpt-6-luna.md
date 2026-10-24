@@ -48,8 +48,8 @@ You are about to send one request to `gpt-6-luna` with `askcodex ask`. Luna is t
    - Supply facts newer than the 2026-05-18 cutoff ([2]).
 3. Run it:
    ```sh
-   mkdir -p /tmp/askcodex
-   cat > /tmp/askcodex/tickets.schema.json <<'EOF'
+   W="${W:-$(mktemp -d "${TMPDIR:-/tmp}/askcodex.XXXXXX")}"  # private work dir: SKILL.md step 4
+   cat > "$W/tickets.schema.json" <<'EOF'
    {"type": "object", "additionalProperties": false, "required": ["tickets"],
     "properties": {"tickets": {"type": "array", "items": {
       "type": "object", "additionalProperties": false,
@@ -60,7 +60,7 @@ You are about to send one request to `gpt-6-luna` with `askcodex ask`. Luna is t
         "severity": {"type": ["integer", "null"], "enum": [1, 2, 3, null]},
         "summary": {"type": "string"}}}}}}
    EOF
-   cat > /tmp/askcodex/luna-brief.txt <<'EOF'
+   cat > "$W/luna-brief.txt" <<'EOF'
    Classify each support ticket below as one entry of "tickets", in input order.
    id: copy the ticket's id exactly. product: "app", "api" or "billing". severity: 1-3,
    1 = outage. summary: at most 12 words. Use null for product or severity when the
@@ -70,12 +70,12 @@ You are about to send one request to `gpt-6-luna` with `askcodex ask`. Luna is t
    [paste tickets]
    EOF
    askcodex ask - --model gpt-6-luna --effort low --verbosity low \
-     --schema /tmp/askcodex/tickets.schema.json --json \
-     < /tmp/askcodex/luna-brief.txt > /tmp/askcodex/luna-tickets.json
+     --schema "$W/tickets.schema.json" --json \
+     < "$W/luna-brief.txt" > "$W/luna-tickets.json"
    IDS='["T-17","T-18","T-19"]'   # the ids of the tickets you pasted, in order
    jq -e --argjson ids "$IDS" '.result.json.tickets | map(.id) == $ids
      and all(.[]; .summary | split(" ") | map(select(length > 0)) | length <= 12)' \
-     /tmp/askcodex/luna-tickets.json
+     "$W/luna-tickets.json"
    ```
    This exact run, with four tickets, returned schema-valid JSON and the check printed `true` (observed 2026-10-02). The backend enforces keys, types, enums and nulls, and askcodex re-checks the structure and fails the call (`response_invalid`) when the answer does not parse or does not match, so `.result.json` needs no structural check. The `jq -e` line checks what a schema cannot express: one entry per pasted ticket with its id in order, and the 12-word cap. It prints `false` and exits 1 on a missing, extra, invented or reordered id, or a long summary. `true` is not proof that the values are right: step 4 still compares each product, severity and summary with its ticket. For one ticket per call, use the record schema alone as the root, as in [prompting-text.md](prompting-text.md). Paste only tickets that carry an id; ask the user for missing ids first. If the call fails with `error.backend.code: "invalid_json_schema"`, fix the key the message names; no answer was generated.
 4. Check the answer for these failure modes before you use it, comparing each value with its source ticket (a sample for large batches, saying how many you checked): merges or behaviors you did not ask for; guessed values where the source is silent and you asked for null; summaries that change the meaning. A schema-valid answer can still be wrong.

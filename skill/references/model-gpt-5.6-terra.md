@@ -45,10 +45,10 @@ You are about to send one request to `gpt-5.6-terra` with `askcodex ask`. Use it
    - For summaries and consolidation, list what must survive: "Keep all required facts, decisions, caveats, and next steps. Trim introductions, repetition, generic reassurance, and optional background first." ([2])
 3. Run it:
    ```sh
-   mkdir -p /tmp/askcodex
+   W="${W:-$(mktemp -d "${TMPDIR:-/tmp}/askcodex.XXXXXX")}"  # private work dir: SKILL.md step 4
    askcodex ask - --model gpt-5.6-terra --effort medium --json \
-     < /tmp/askcodex/incident-notes.txt > /tmp/askcodex/terra-incident-summary.json
-   jq -r .result.text /tmp/askcodex/terra-incident-summary.json
+     < "$W/incident-notes.txt" > "$W/terra-incident-summary.json"
+   jq -r .result.text "$W/terra-incident-summary.json"
    ```
    Example `incident-notes.txt`:
    ```text

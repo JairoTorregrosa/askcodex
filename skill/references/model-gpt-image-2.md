@@ -91,9 +91,9 @@ Checked against codex rust-v0.157.1 source, live calls, and the sources below.
    - **Masks:** askcodex has none. If an area must stay pixel-identical, composite the approved edit into the original locally [2].
 4. **Run it:**
    ```sh
-   mkdir -p /tmp/askcodex
-   askcodex image create 'Vertical 9:16 portrait composition. Sticker illustration for a café window: a steaming white coffee cup above a ribbon banner. Render "CAFÉ ABIERTO" exactly once on the banner in bold rounded letters; no other text. Thick white die-cut border. Isolated on a fully transparent background: no scenery, no solid backdrop, no checkerboard.' --background transparent -o /tmp/askcodex/cafe-sticker-v1.png
-   askcodex image edit 'Vertical 9:16 portrait composition. Image 1 is the edit target. Change only the banner color to deep teal. Keep the cup, steam, die-cut border, the text "CAFÉ ABIERTO" and its letterforms unchanged. Preserve the transparent background.' --background transparent -i /tmp/askcodex/cafe-sticker-v1.png -o /tmp/askcodex/cafe-sticker-v2.png
+   W="${W:-$(mktemp -d "${TMPDIR:-/tmp}/askcodex.XXXXXX")}"  # private work dir: SKILL.md step 4
+   askcodex image create 'Vertical 9:16 portrait composition. Sticker illustration for a café window: a steaming white coffee cup above a ribbon banner. Render "CAFÉ ABIERTO" exactly once on the banner in bold rounded letters; no other text. Thick white die-cut border. Isolated on a fully transparent background: no scenery, no solid backdrop, no checkerboard.' --background transparent -o "$W/cafe-sticker-v1.png"
+   askcodex image edit 'Vertical 9:16 portrait composition. Image 1 is the edit target. Change only the banner color to deep teal. Keep the cup, steam, die-cut border, the text "CAFÉ ABIERTO" and its letterforms unchanged. Preserve the transparent background.' --background transparent -i "$W/cafe-sticker-v1.png" -o "$W/cafe-sticker-v2.png"
    ```
    A near-identical create without the flag returned 941×1672 with alpha and exact text (observed 2026-09-27). The flag was verified on other prompts (observed 2026-10-02); this edit was not run.
 5. **Inspect before you report.**

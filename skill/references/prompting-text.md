@@ -96,18 +96,19 @@ output against the task.
    A prepared brief with a recoverable answer:
 
    ```sh
-   mkdir -p /tmp/askcodex
-   askcodex ask - --model gpt-6.1-sol --effort high --json < /tmp/askcodex/brief.txt > /tmp/askcodex/answer.json
-   jq -r .result.text /tmp/askcodex/answer.json
+   W="${W:-$(mktemp -d "${TMPDIR:-/tmp}/askcodex.XXXXXX")}"  # private work dir: SKILL.md step 4
+   askcodex ask - --model gpt-6.1-sol --effort high --json < "$W/brief.txt" > "$W/answer.json"
+   jq -r .result.text "$W/answer.json"
    ```
 
-   Write `brief.txt` with the actual inputs first. Run a call that may take minutes in the
+   Write `$W/brief.txt` with the actual inputs first. Run a call that may take minutes in the
    background or in tmux.
 
    An extraction you will parse:
 
    ```sh
-   cat > /tmp/askcodex/ticket.schema.json <<'EOF'
+   W="${W:-$(mktemp -d "${TMPDIR:-/tmp}/askcodex.XXXXXX")}"  # private work dir: SKILL.md step 4
+   cat > "$W/ticket.schema.json" <<'EOF'
    {"type": "object", "additionalProperties": false,
     "required": ["id", "product", "severity", "summary"],
     "properties": {
@@ -119,8 +120,8 @@ output against the task.
    echo "T-17: Checkout page crashes when I apply a coupon on iOS." |
      askcodex ask - --model gpt-6-luna --effort low --verbosity low \
        --instructions 'Extract the support ticket. id: copy it exactly. product: "app" (mobile or web app), "api" or "billing". severity: 1 = outage, 2 = a feature is broken, 3 = minor; only when the ticket states its impact. summary: at most 12 words. Use null for product or severity when the ticket does not state it; never guess.' \
-       --schema /tmp/askcodex/ticket.schema.json --json > /tmp/askcodex/ticket.json
-   jq .result.json /tmp/askcodex/ticket.json
+       --schema "$W/ticket.schema.json" --json > "$W/ticket.json"
+   jq .result.json "$W/ticket.json"
    ```
 
    It returned `{"id":"T-17","product":"app","severity":2,"summary":"Checkout page crashes when

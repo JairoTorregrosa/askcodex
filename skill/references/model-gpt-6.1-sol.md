@@ -53,8 +53,8 @@ You are about to send one request to `gpt-6.1-sol` with `askcodex ask`. GPT-6.1 
    - Supply any fact newer than the 2026-04-30 cutoff ([2]).
 3. Run it:
    ```sh
-   mkdir -p /tmp/askcodex
-   cat > /tmp/askcodex/sol61-brief.txt <<'EOF'
+   W="${W:-$(mktemp -d "${TMPDIR:-/tmp}/askcodex.XXXXXX")}"  # private work dir: SKILL.md step 4
+   cat > "$W/sol61-brief.txt" <<'EOF'
    Task: Review this diff for defects before it merges.
    Context: [the diff, the functions it calls, the intended behavior; secrets replaced by placeholders]
    Constraints: Report defects only: no style, naming or refactor comments.
@@ -65,8 +65,8 @@ You are about to send one request to `gpt-6.1-sol` with `askcodex ask`. GPT-6.1 
    EOF
    askcodex ask - --model gpt-6.1-sol --effort medium --verbosity low \
      --instructions "If a detail is missing, choose a reasonable default, state it in one line, and deliver the complete result. Do not ask questions. If code or a fact that a finding or fix depends on is missing, name it and withhold that finding instead of guessing." \
-     --json < /tmp/askcodex/sol61-brief.txt > /tmp/askcodex/sol61-review.json
-   jq -r .result.text /tmp/askcodex/sol61-review.json
+     --json < "$W/sol61-brief.txt" > "$W/sol61-review.json"
+   jq -r .result.text "$W/sol61-review.json"
    ```
 4. Before you use the answer, check it for these failure modes: "Yes." or questions where the deliverable should be; a finding or patch that relies on code you did not paste; a stated default that conflicts with your intent; headings, bold text or lists you did not ask for; work beyond the scope you set; a claim that tests pass.
 

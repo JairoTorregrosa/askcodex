@@ -44,10 +44,10 @@ You are about to send one request to `gpt-daybreak-blue-latest` with `askcodex a
    - Redact secrets, tokens, customer data and internal hostnames from pasted code and logs ([1]).
 4. Run it:
    ```sh
-   mkdir -p /tmp/askcodex
+   W="${W:-$(mktemp -d "${TMPDIR:-/tmp}/askcodex.XXXXXX")}"  # private work dir: SKILL.md step 4
    askcodex ask - --model gpt-daybreak-blue-latest --effort medium --json \
-     < /tmp/askcodex/authz-review.txt > /tmp/askcodex/daybreak-authz-review.json
-   jq -r .result.text /tmp/askcodex/daybreak-authz-review.json
+     < "$W/authz-review.txt" > "$W/daybreak-authz-review.json"
+   jq -r .result.text "$W/daybreak-authz-review.json"
    ```
    Example `authz-review.txt`:
    ```text

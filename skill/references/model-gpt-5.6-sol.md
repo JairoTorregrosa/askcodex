@@ -46,11 +46,11 @@ You are about to send one request to `gpt-5.6-sol` with `askcodex ask`. Use it f
    - In a follow-up that pushes back, include the counter-evidence. Codex steers this model to answer objections "with concrete evidence and diligent reasoning rather than unsubstantiated deference" (Codex base instructions, 0.157.1).
 3. Run it:
    ```sh
-   mkdir -p /tmp/askcodex
+   W="${W:-$(mktemp -d "${TMPDIR:-/tmp}/askcodex.XXXXXX")}"  # private work dir: SKILL.md step 4
    askcodex ask - --model gpt-5.6-sol --effort medium \
      --instructions "Review only: report defects, do not rewrite unrelated code. State each finding once." \
-     --json < /tmp/askcodex/retry-review.txt > /tmp/askcodex/sol-retry-review.json
-   jq -r .result.text /tmp/askcodex/sol-retry-review.json
+     --json < "$W/retry-review.txt" > "$W/sol-retry-review.json"
+   jq -r .result.text "$W/sol-retry-review.json"
    ```
    Example `retry-review.txt`:
    ```text

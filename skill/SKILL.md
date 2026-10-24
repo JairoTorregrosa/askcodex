@@ -81,9 +81,9 @@ the user the useful output with its saved path.
    | Result | Command | Read first |
    |---|---|---|
    | Answer, analysis, writing, code, or review | `askcodex ask "prompt" --model <slug> --effort <level>` (add `--verbosity low` for a concise answer) | [prompting-text.md](references/prompting-text.md) and the model's guide below |
-   | Classification or extraction you will parse | `askcodex ask - --schema /tmp/askcodex/<name>.schema.json --json < brief.txt`, then read `.result.json` | Same as above |
-   | New image | `askcodex image create "prompt" -o /tmp/askcodex/<name>-v1.png` (add `--background transparent` for a cutout) | [prompting-images.md](references/prompting-images.md) and [model-gpt-image-2.md](references/model-gpt-image-2.md) |
-   | Image edit from one to five PNG references | `askcodex image edit "prompt" -i ref.png -o /tmp/askcodex/<name>-v2.png` | Same as a new image |
+   | Classification or extraction you will parse | `askcodex ask - --schema "$W/<name>.schema.json" --json < "$W/brief.txt"`, then read `.result.json` | Same as above |
+   | New image | `askcodex image create "prompt" -o "$W/<name>-v1.png"` (add `--background transparent` for a cutout) | [prompting-images.md](references/prompting-images.md) and [model-gpt-image-2.md](references/model-gpt-image-2.md) |
+   | Image edit from one to five PNG references | `askcodex image edit "prompt" -i ref.png -o "$W/<name>-v2.png"` | Same as a new image |
    | Audio transcript | `askcodex transcribe recording.wav` | [transcription.md](references/transcription.md) |
    | Which models exist, their default effort, what retires | `askcodex models --no-refresh` (a short list with descriptions) | Nothing; no prompt is involved |
    | Quota, account, auth status | `askcodex usage` / `whoami` / `auth status`, each with `--json --no-refresh` | Nothing |
@@ -104,19 +104,23 @@ the user the useful output with its saved path.
    whenever you compare outputs or need to reproduce one.
 3. Write a complete brief: the deliverable, its audience, the constraints, what "done" means, the
    source material itself, what must stay unchanged, and the output format.
-4. Run one focused request. Create `/tmp/askcodex/` first and give every artifact a descriptive
-   name with a version suffix, so an edit never overwrites a useful result. For a long-running job,
-   run it in the background or in tmux and save its output to a file.
+4. Run one focused request. Once per session, create a private work directory with
+   `W="$(mktemp -d "${TMPDIR:-/tmp}/askcodex.XXXXXX")"; echo "$W"`, keep every brief, schema,
+   recording and artifact in it (written `$W` below), and set `W` to the printed path again in each
+   new shell. Never use a fixed directory in the shared temp dir: other users on the machine can
+   read it or create it first. Give every artifact a descriptive name with a version suffix, so an
+   edit never overwrites a useful result. For a long-running job, run it in the background or in
+   tmux and save its output to a file.
 5. Inspect the result against the brief. Make the next request about one specific observed problem,
    and keep the last useful version.
 
 ## Handle the output
 
-- Images: always pass `-o /tmp/askcodex/<name>-vN.png`. With `--json`, `.result.width`,
+- Images: always pass `-o "$W/<name>-vN.png"`. With `--json`, `.result.width`,
   `.result.height` and `.result.alpha_channel` come from the saved file; `alpha_channel: true`
   only says transparency is possible, so look at the image before you call it a cutout.
-- Long text answers: `--json > /tmp/askcodex/<name>.json`, then
-  `jq -r .result.text /tmp/askcodex/<name>.json`. Keep large JSON and image payloads out of the
+- Long text answers: `--json > "$W/<name>.json"`, then
+  `jq -r .result.text "$W/<name>.json"`. Keep large JSON and image payloads out of the
   conversation.
 - `--json`, `--events`, and `--no-refresh` are global flags and work after the subcommand.
 - Semantic `--json` success output is `{schema_version:1,command,result}`. Read `.result`. Do not

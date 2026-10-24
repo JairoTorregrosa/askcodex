@@ -47,8 +47,8 @@ You are about to send one request to `gpt-5.6-luna` with `askcodex ask`. Use it 
    - When you will parse the answer, pass `--schema` (askcodex 0.3.0) so the backend enforces the keys and the label set (observed 2026-10-02).
 3. Run it:
    ```sh
-   mkdir -p /tmp/askcodex
-   cat > /tmp/askcodex/labels.schema.json <<'EOF'
+   W="${W:-$(mktemp -d "${TMPDIR:-/tmp}/askcodex.XXXXXX")}"  # private work dir: SKILL.md step 4
+   cat > "$W/labels.schema.json" <<'EOF'
    {"type": "object", "additionalProperties": false, "required": ["labels"],
     "properties": {"labels": {"type": "array", "items": {
       "type": "object", "additionalProperties": false, "required": ["line", "label"],
@@ -58,9 +58,9 @@ You are about to send one request to `gpt-5.6-luna` with `askcodex ask`. Use it 
    EOF
    askcodex ask - --model gpt-5.6-luna --effort low \
      --instructions "Classify each numbered input line, one entry per line, in input order. Labels: auth_failure, timeout, disk_full, other." \
-     --schema /tmp/askcodex/labels.schema.json --json < /tmp/askcodex/error-lines.txt > /tmp/askcodex/luna-labels.json
-   jq -e --argjson n "$(grep -c . /tmp/askcodex/error-lines.txt)" \
-     '.result.json.labels | map(.line) == [range(1; $n + 1)]' /tmp/askcodex/luna-labels.json
+     --schema "$W/labels.schema.json" --json < "$W/error-lines.txt" > "$W/luna-labels.json"
+   jq -e --argjson n "$(grep -c . "$W/error-lines.txt")" \
+     '.result.json.labels | map(.line) == [range(1; $n + 1)]' "$W/luna-labels.json"
    ```
    `error-lines.txt` holds the log lines numbered from 1, one per line, pasted in full with secrets and personal data redacted. The check prints `false` and exits 1 when a line is dropped, merged, invented or out of order.
 4. Check the answer before you use it:

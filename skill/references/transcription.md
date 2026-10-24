@@ -25,8 +25,8 @@ transcript against the recording, and hand it over separately from any later edi
 1. Convert other formats to WAV without overwriting the original. With FFmpeg installed:
 
    ```sh
-   mkdir -p /tmp/askcodex
-   ffmpeg -i recording.m4a -ar 16000 -ac 1 /tmp/askcodex/recording.wav
+   W="${W:-$(mktemp -d "${TMPDIR:-/tmp}/askcodex.XXXXXX")}"  # private work dir: SKILL.md step 4
+   ffmpeg -i recording.m4a -ar 16000 -ac 1 "$W/recording.wav"
    ```
 
    These settings are a practical starting point, not required server settings. Split a long
@@ -34,14 +34,16 @@ transcript against the recording, and hand it over separately from any later edi
 2. Transcribe and save:
 
    ```sh
-   askcodex transcribe /tmp/askcodex/recording.wav --no-refresh > /tmp/askcodex/transcript.txt
+   W="${W:-$(mktemp -d "${TMPDIR:-/tmp}/askcodex.XXXXXX")}"  # private work dir: SKILL.md step 4
+   askcodex transcribe "$W/recording.wav" --no-refresh > "$W/transcript.txt"
    ```
 
    For structured output:
 
    ```sh
-   askcodex transcribe /tmp/askcodex/recording.wav --json --no-refresh > /tmp/askcodex/transcript.json
-   jq -r .result.text /tmp/askcodex/transcript.json
+   W="${W:-$(mktemp -d "${TMPDIR:-/tmp}/askcodex.XXXXXX")}"  # private work dir: SKILL.md step 4
+   askcodex transcribe "$W/recording.wav" --json --no-refresh > "$W/transcript.json"
+   jq -r .result.text "$W/transcript.json"
    ```
 
    Run a call that may take minutes in the background or in tmux.

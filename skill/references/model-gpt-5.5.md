@@ -43,10 +43,10 @@ You are about to send one request to `gpt-5.5` with `askcodex ask`. Send it only
 3. Write the brief. Follow [prompting-text.md](prompting-text.md). State the outcome and the success criteria, and leave the path to the model ([2]). If you want Codex's review shape, ask for findings ordered by severity yourself.
 4. Run it:
    ```sh
-   mkdir -p /tmp/askcodex
+   W="${W:-$(mktemp -d "${TMPDIR:-/tmp}/askcodex.XXXXXX")}"  # private work dir: SKILL.md step 4
    askcodex ask - --model gpt-5.5 --effort medium --json \
-     < /tmp/askcodex/brief.txt > /tmp/askcodex/gpt-5.5-baseline.json
-   jq -r .result.text /tmp/askcodex/gpt-5.5-baseline.json
+     < "$W/brief.txt" > "$W/gpt-5.5-baseline.json"
+   jq -r .result.text "$W/gpt-5.5-baseline.json"
    ```
 5. Check that every fix does what its finding claims (see the probe above), and paste any fact dated after Dec 01, 2025.
 
