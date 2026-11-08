@@ -31,7 +31,7 @@ its changed files.
 
 | Zone | Files | Why |
 |---|---|---|
-| critical | `install.sh`, `.github/*`, `AGENTS.md`, `CLAUDE.md`, `GOVERNANCE.md`, `agm.json`, `src/auth.rs`, `src/auth/*`, `skill/*` | Writes to user machines, publishes binaries, instructs agents, or changes the rules of review itself. The auth module rewrites the user's real credentials in `~/.codex/auth.json`: a bug there can lock the user out of codex. The `skill/` files are installed into `~/.claude/skills/` and instruct agents. `CLAUDE.md` is a symlink to `AGENTS.md`; replacing it with a file is an agent-instruction change. |
+| critical | `install.sh`, `.github/*`, `AGENTS.md`, `CLAUDE.md`, `GOVERNANCE.md`, `agm.json`, `src/auth.rs`, `src/auth/*`, `skill/*` | Writes to user machines, publishes binaries, instructs agents, or changes the rules of review itself. The auth module rewrites the user's real credentials in `~/.codex/auth.json`: a bug there can lock the user out of codex. The `skill/` files are installed into `~/.claude/skills/` and instruct agents. `AGENTS.md` is the only agent-instructions file. Do not add a `CLAUDE.md`: Claude Code reads `AGENTS.md`, and a `CLAUDE.md` stops it from loading. Adding one is an agent-instruction change. |
 | high | `http.rs`, `main.rs`, `endpoints/*`, `config.rs`, `Cargo.toml`, `Cargo.lock` | Network calls to the live backend, header and error handling, `CODEX_HOME` resolution, the CLI entry point, dependency supply chain. |
 | medium | the rest of `src/` | Correctness of output. The product is a truthful CLI; a faked success or a wrong number is worse than a loud error. |
 | low | documentation, assets | No runtime effect. |
